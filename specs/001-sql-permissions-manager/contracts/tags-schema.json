@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bifrost Tag Store",
+  "description": "Tag assignments stored in %APPDATA%\\Bifrost\\tags.json. Tags are local to each administrator's machine.",
+  "type": "object",
+  "required": ["user_tags", "object_tags"],
+  "additionalProperties": false,
+  "properties": {
+    "user_tags": {
+      "type": "object",
+      "description": "Maps database login name to a list of tags assigned to that user.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]+$",
+          "description": "Alphanumeric tag, no spaces or special characters"
+        },
+        "uniqueItems": true
+      },
+      "example": {
+        "alice": ["finance", "readonly"],
+        "bob": ["tier1"]
+      }
+    },
+    "object_tags": {
+      "type": "object",
+      "description": "Maps 'schema_name.object_name' to a list of tags assigned to that database object.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]+$",
+          "description": "Alphanumeric tag, no spaces or special characters"
+        },
+        "uniqueItems": true
+      },
+      "example": {
+        "dbo.Orders": ["finance", "critical"],
+        "dbo.GetReportData": ["readonly", "tier2"]
+      }
+    }
+  },
+  "notes": [
+    "Tag keys in user_tags must match sys.database_principals.name exactly.",
+    "Tag keys in object_tags use the format 'schema_name.object_name'.",
+    "Tags are case-preserved but duplicate detection is case-insensitive.",
+    "An empty tags.json is valid: { \"user_tags\": {}, \"object_tags\": {} }",
+    "If tags.json is missing, the application creates it with empty collections on first tag write.",
+    "Tags are never synced to SQL Server; they exist only on the local machine."
+  ]
+}

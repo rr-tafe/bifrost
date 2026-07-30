@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bifrost Configuration",
+  "description": "Connection configuration stored in %APPDATA%\\Bifrost\\config.json",
+  "type": "object",
+  "required": ["server", "port", "database", "schema", "auth_type"],
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SQL Server hostname, IP address, or named instance (e.g. SQLSERVER01 or 192.168.1.10\\SQLEXPRESS)"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 1433,
+      "description": "TCP port for the SQL Server connection"
+    },
+    "database": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the target SQL Server database"
+    },
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "default": "dbo",
+      "description": "Schema in which Bifrost creates its own tables (e.g. Bifrost_audit_log). Must be a valid SQL identifier. Defaults to 'dbo'. The schema is created automatically on first connection if it does not exist and the account has CREATE SCHEMA permission."
+    },
+    "auth_type": {
+      "type": "string",
+      "enum": ["windows"],
+      "description": "Authentication method: only Windows Authentication is supported; uses the current Windows session (Trusted_Connection=yes)."
+    }
+  },
+  "examples": [
+    {
+      "server": "SQLSERVER01",
+      "port": 1433,
+      "database": "MyAppDB",
+      "schema": "dbo",
+      "auth_type": "windows"
+    }
+  ]
+}
