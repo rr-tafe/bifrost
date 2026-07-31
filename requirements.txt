@@ -1,0 +1,6 @@
+# Runtime dependencies for Bifrost - SQL Server Permissions Manager
+# Python 3.11+ required
+
+# SQL Server connectivity (justified: no stdlib SQL Server driver; actively maintained;
+# full Windows Auth support; requires Microsoft ODBC Driver 18 for SQL Server at OS level)
+pyodbc==5.1.0
