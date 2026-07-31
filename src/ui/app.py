@@ -91,7 +91,7 @@ class BifrostApp(tk.Tk):
         self.tag_store = TagStore()
         self.connection = None
         self.matrix: PermissionMatrix | None = None
-        self.current_view: str = ViewType.SETTINGS
+        self.current_view: str | None = None  # None until first view is shown
         self._has_unsaved_changes = False
 
         # View instances (lazily initialized)
