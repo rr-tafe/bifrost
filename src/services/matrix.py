@@ -14,17 +14,17 @@ The matrix is the core data structure for the application:
 Usage:
     from src.services.matrix import PermissionMatrix
     from src.db.connection import create_connection
-    
+
     conn = create_connection(config)
     matrix = PermissionMatrix(conn, schema="dbo")
     matrix.load()
-    
+
     # Stage a change
     matrix.stage_change("alice", "dbo", "Orders", PermissionType.SELECT, PermissionState.GRANT)
-    
+
     # Commit all staged changes
     results = matrix.commit()
-    
+
     # Or cancel all staged changes
     matrix.cancel()
 """

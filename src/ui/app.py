@@ -27,6 +27,7 @@ from tkinter import messagebox, ttk
 
 from src.models.config import Configuration
 from src.services.config import load_config
+from src.services.matrix import PermissionMatrix
 from src.services.tags import TagStore
 from src.ui.views.audit import AuditView
 from src.ui.views.matrix import MatrixView
@@ -89,6 +90,7 @@ class BifrostApp(tk.Tk):
         self.config: Configuration | None = None
         self.tag_store = TagStore()
         self.connection = None
+        self.matrix: PermissionMatrix | None = None
         self.current_view: str = ViewType.SETTINGS
         self._has_unsaved_changes = False
 
@@ -430,10 +432,80 @@ class BifrostApp(tk.Tk):
             self.switch_view(ViewType.SETTINGS)
             return
 
-        # Connection will be implemented in a future commit
-        # For now, just update UI state
-        self._update_connection_status(connected=False)
-        self.switch_view(ViewType.MATRIX)
+        self.set_status("Connecting...")
+
+        try:
+            from src.db.audit import ensure_audit_log_table
+            from src.db.connection import create_connection, get_current_user
+            from src.db.objects import fetch_all_objects
+            from src.db.permissions import fetch_all_permissions
+            from src.db.users import fetch_all_users
+
+            # Create connection
+            self.connection = create_connection(self.config)
+
+            # Ensure audit log table exists
+            ensure_audit_log_table(self.connection, self.config.schema)
+
+            # Get current user
+            current_user = get_current_user(self.connection)
+
+            # Load data
+            users = fetch_all_users(self.connection)
+            objects = fetch_all_objects(self.connection)
+            permissions = fetch_all_permissions(self.connection)
+
+            # Build permission matrix
+            self.matrix = PermissionMatrix()
+            self.matrix.load(users, objects, permissions)
+
+            # Update UI
+            self._update_connection_status(connected=True)
+            self._update_header_info(
+                server=self.config.server,
+                database=self.config.database,
+                user=current_user,
+            )
+
+            # Update views with data
+            self._update_views_with_data(users, objects)
+
+            self.set_status(f"Connected as {current_user}")
+            self.switch_view(ViewType.MATRIX)
+
+        except ImportError as e:
+            self.set_status(f"Module error: {e}")
+            self._update_connection_status(connected=False)
+            self.switch_view(ViewType.MATRIX)  # Show empty matrix
+
+        except Exception as e:
+            self.set_status(f"Connection failed: {e}")
+            self._update_connection_status(connected=False)
+            self.switch_view(ViewType.SETTINGS)
+
+    def _update_views_with_data(self, users: list, objects: list) -> None:
+        """Update views with loaded data."""
+        # Update matrix view
+        if ViewType.MATRIX in self._views:
+            matrix_view = self._views[ViewType.MATRIX]
+            if hasattr(matrix_view, "set_matrix"):
+                matrix_view.set_matrix(self.matrix)
+                matrix_view.refresh()
+
+        # Update tags view
+        if ViewType.TAGS in self._views:
+            tags_view = self._views[ViewType.TAGS]
+            if hasattr(tags_view, "set_data"):
+                tags_view.set_data(self.tag_store, users, objects)
+
+        # Update audit view with fetch callback
+        if ViewType.AUDIT in self._views:
+            audit_view = self._views[ViewType.AUDIT]
+            if hasattr(audit_view, "set_callbacks"):
+                audit_view.set_callbacks(
+                    on_fetch=self._fetch_audit_entries,
+                    on_export=None,  # Use default export
+                )
 
     def switch_view(self, view_type: str) -> None:
         """
@@ -536,6 +608,10 @@ class BifrostApp(tk.Tk):
             self._server_label.configure(text="Not connected")
             self._connection_indicator.configure(foreground="gray")
 
+    def _update_header_info(self, server: str, database: str, user: str) -> None:
+        """Update header with connection details."""
+        self._server_label.configure(text=f"{server}/{database} ({user})")
+
     def set_status(self, message: str) -> None:
         """Update the status bar message."""
         self._status_label.configure(text=message)
@@ -589,17 +665,172 @@ class BifrostApp(tk.Tk):
         self.set_status("Redo - feature coming soon")
 
     def _commit_changes(self) -> None:
-        """Commit all pending changes."""
-        self.set_status("Commit - feature coming soon")
+        """Commit all pending changes to the database."""
+        if not self.connection:
+            self.set_status("Not connected to database")
+            return
+
+        if not hasattr(self, "matrix") or not self.matrix:
+            self.set_status("No changes to commit")
+            return
+
+        staged_changes = self.matrix.get_staged_changes()
+        if not staged_changes:
+            self.set_status("No changes to commit")
+            return
+
+        self.set_status("Committing changes...")
+
+        try:
+            from datetime import datetime
+
+            from src.db.audit import write_audit_entries
+            from src.db.connection import get_current_user
+            from src.db.permissions import apply_permission_changes
+            from src.models.audit_entry import AuditEntry
+
+            administrator = get_current_user(self.connection)
+
+            # Apply permission changes
+            errors = apply_permission_changes(self.connection, staged_changes)
+
+            if errors:
+                self.connection.rollback()
+                messagebox.showerror(
+                    "Commit Failed",
+                    "Failed to apply changes:\n\n" + "\n".join(errors[:5]),
+                )
+                self.set_status("Commit failed")
+                return
+
+            # Create audit entries
+            audit_entries = []
+            for change in staged_changes:
+                entry = AuditEntry(
+                    administrator=administrator,
+                    affected_user=change.user,
+                    schema_name=change.schema_name,
+                    object_name=change.object_name,
+                    permission_type=change.permission_type.value,
+                    action=change.new_state.value if change.new_state.value != "NONE" else "REVOKE",
+                    previous_state=change.old_state.value,
+                    new_state=change.new_state.value,
+                    changed_at=datetime.utcnow(),
+                    explanation=f"{change.new_state.value} {change.permission_type.value} on "
+                               f"{change.schema_name}.{change.object_name} to {change.user}",
+                )
+                audit_entries.append(entry)
+
+            # Write audit log
+            write_audit_entries(self.connection, self.config.schema, audit_entries)
+
+            # Commit transaction
+            self.connection.commit()
+
+            # Clear staged changes in matrix
+            self.matrix.commit()
+            self._has_unsaved_changes = False
+
+            # Refresh matrix view
+            if ViewType.MATRIX in self._views:
+                self._views[ViewType.MATRIX].refresh()
+
+            self.set_status(f"Committed {len(staged_changes)} change(s)")
+
+        except Exception as e:
+            self.connection.rollback()
+            messagebox.showerror("Commit Failed", str(e))
+            self.set_status("Commit failed")
 
     def _cancel_changes(self) -> None:
         """Cancel all pending changes."""
-        self.set_status("Cancel - feature coming soon")
+        if not hasattr(self, "matrix") or not self.matrix:
+            self.set_status("No changes to cancel")
+            return
+
+        staged_count = len(self.matrix.get_staged_changes())
+        if staged_count == 0:
+            self.set_status("No changes to cancel")
+            return
+
+        if messagebox.askyesno(
+            "Cancel Changes",
+            f"Are you sure you want to discard {staged_count} pending change(s)?",
+        ):
+            self.matrix.cancel()
+            self._has_unsaved_changes = False
+
+            # Refresh matrix view
+            if ViewType.MATRIX in self._views:
+                self._views[ViewType.MATRIX].refresh()
+
+            self.set_status(f"Discarded {staged_count} change(s)")
 
     def _refresh(self) -> None:
-        """Refresh current view."""
+        """Refresh current view with fresh data from database."""
+        if not self.connection:
+            self.set_status("Not connected to database")
+            return
+
         self.set_status("Refreshing...")
-        self.after(500, lambda: self.set_status("Ready"))
+
+        try:
+            from src.db.objects import fetch_all_objects
+            from src.db.permissions import fetch_all_permissions
+            from src.db.users import fetch_all_users
+
+            # Reload data
+            users = fetch_all_users(self.connection)
+            objects = fetch_all_objects(self.connection)
+            permissions = fetch_all_permissions(self.connection)
+
+            # Rebuild matrix (preserves staged changes)
+            if hasattr(self, "matrix") and self.matrix:
+                staged = self.matrix.get_staged_changes()
+                self.matrix.load(users, objects, permissions)
+                # Reapply staged changes
+                for change in staged:
+                    self.matrix.stage_change(
+                        change.user,
+                        change.schema_name,
+                        change.object_name,
+                        change.permission_type,
+                        change.new_state,
+                    )
+
+            # Update views
+            self._update_views_with_data(users, objects)
+
+            # Refresh current view
+            if self.current_view in self._views:
+                view = self._views[self.current_view]
+                if hasattr(view, "refresh"):
+                    view.refresh()
+
+            self.set_status("Refreshed")
+
+        except Exception as e:
+            self.set_status(f"Refresh failed: {e}")
+
+    def _fetch_audit_entries(self, filters: dict) -> list:
+        """Fetch audit entries from database with filters."""
+        if not self.connection:
+            return []
+
+        try:
+            from src.db.audit import fetch_audit_entries
+
+            return fetch_audit_entries(
+                self.connection,
+                self.config.schema,
+                user=filters.get("user"),
+                object_name=filters.get("object"),
+                action=filters.get("action"),
+                from_date=filters.get("from_date"),
+                to_date=filters.get("to_date"),
+            )
+        except Exception:
+            return []
 
     def _show_shortcuts(self) -> None:
         """Show keyboard shortcuts dialog."""

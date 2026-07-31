@@ -8,7 +8,7 @@ Exports run without blocking the UI thread (called from background worker).
 
 Usage:
     from src.services.export import export_permissions_csv, export_audit_csv
-    
+
     # Export permission matrix
     export_permissions_csv(
         file_path="permissions_report.csv",
@@ -16,7 +16,7 @@ Usage:
         objects=objects,
         assignments=assignments
     )
-    
+
     # Export audit log
     export_audit_csv(
         file_path="audit_log.csv",
