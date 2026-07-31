@@ -111,7 +111,7 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
     # Find the best available SQL Server ODBC driver
     available_drivers = pyodbc.drivers()
     driver = None
-    
+
     # Prefer newer drivers
     preferred_drivers = [
         "ODBC Driver 18 for SQL Server",
@@ -120,12 +120,12 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
         "SQL Server Native Client 11.0",
         "SQL Server",
     ]
-    
+
     for preferred in preferred_drivers:
         if preferred in available_drivers:
             driver = preferred
             break
-    
+
     if not driver:
         raise DatabaseConnectionError(
             "No SQL Server ODBC driver found. Please install 'ODBC Driver 17 for SQL Server' "

@@ -467,11 +467,13 @@ class BifrostApp(tk.Tk):
                 user=current_user,
             )
 
-            # Update views with data
+            # Switch to matrix view first (creates the view if needed)
+            self.switch_view(ViewType.MATRIX)
+
+            # Then update views with data (now that they exist)
             self._update_views_with_data(users, objects)
 
             self.set_status(f"Connected as {current_user}")
-            self.switch_view(ViewType.MATRIX)
 
         except ImportError as e:
             self.set_status(f"Module error: {e}")
@@ -552,12 +554,15 @@ class BifrostApp(tk.Tk):
             )
 
         if view_type == ViewType.MATRIX:
-            return MatrixView(
+            view = MatrixView(
                 self._view_container,
-                matrix=None,  # Will be set when connected
+                matrix=self.matrix,  # Pass current matrix (may be None if not connected)
                 on_commit=self._commit_changes,
                 on_cancel=self._cancel_changes,
             )
+            if self.matrix:
+                view.refresh()
+            return view
 
         if view_type == ViewType.TAGS:
             view = TagsView(
