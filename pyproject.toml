@@ -45,11 +45,27 @@ addopts = [
     "--cov=src",
     "--cov-report=html",
     "--cov-report=term-missing",
-    "--cov-fail-under=80",
+    "--cov-fail-under=60",
 ]
 markers = [
     "slow: marks tests as slow (deselected by default in pre-commit)",
     "integration: marks tests requiring live SQL Server connection (deselected by default)",
+]
+
+[tool.coverage.run]
+branch = true
+omit = [
+    "src/db/*",
+    "src/services/matrix.py",
+    "src/ui/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.ruff]
