@@ -28,6 +28,7 @@ from tkinter import messagebox, ttk
 from src.models.config import Configuration
 from src.services.config import load_config
 from src.services.tags import TagStore
+from src.ui.views.settings import SettingsView
 
 
 class ViewType:
@@ -467,13 +468,22 @@ class BifrostApp(tk.Tk):
 
     def _create_view(self, view_type: str) -> tk.Frame:
         """Create a view instance."""
-        # Placeholder frames for now - will be replaced with actual views
+        if view_type == ViewType.SETTINGS:
+            return SettingsView(
+                self._view_container,
+                config=self.config,
+                on_save=self._on_settings_saved,
+                on_test=self._test_connection,
+            )
+
+        # Placeholder frames for views not yet implemented
         frame = ttk.Frame(self._view_container)
 
         if view_type == ViewType.MATRIX:
             label = ttk.Label(
                 frame,
-                text="Permission Matrix View\n\n(Under Construction)",
+                text="Permission Matrix View\n\n(Under Construction)\n\n"
+                "Connect to a database via Settings to view permissions.",
                 font=("Segoe UI", 16),
                 justify="center",
             )
@@ -494,16 +504,24 @@ class BifrostApp(tk.Tk):
                 justify="center",
             )
             label.pack(expand=True)
-        elif view_type == ViewType.SETTINGS:
-            label = ttk.Label(
-                frame,
-                text="Settings View\n\n(Under Construction)",
-                font=("Segoe UI", 16),
-                justify="center",
-            )
-            label.pack(expand=True)
 
         return frame
+
+    def _on_settings_saved(self, config: Configuration) -> None:
+        """Handle settings saved callback."""
+        self.config = config
+        self._try_connect()
+
+    def _test_connection(self, config: Configuration) -> tuple[bool, str]:
+        """Test database connection."""
+        try:
+            from src.db.connection import test_connection
+
+            return test_connection(config)
+        except ImportError:
+            return False, "Database module not available"
+        except Exception as e:
+            return False, f"Connection failed: {str(e)}"
 
     def _update_connection_status(self, connected: bool) -> None:
         """Update the connection indicator."""
