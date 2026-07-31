@@ -28,6 +28,7 @@ from tkinter import messagebox, ttk
 from src.models.config import Configuration
 from src.services.config import load_config
 from src.services.tags import TagStore
+from src.ui.views.matrix import MatrixView
 from src.ui.views.settings import SettingsView
 
 
@@ -476,19 +477,18 @@ class BifrostApp(tk.Tk):
                 on_test=self._test_connection,
             )
 
+        if view_type == ViewType.MATRIX:
+            return MatrixView(
+                self._view_container,
+                matrix=None,  # Will be set when connected
+                on_commit=self._commit_changes,
+                on_cancel=self._cancel_changes,
+            )
+
         # Placeholder frames for views not yet implemented
         frame = ttk.Frame(self._view_container)
 
-        if view_type == ViewType.MATRIX:
-            label = ttk.Label(
-                frame,
-                text="Permission Matrix View\n\n(Under Construction)\n\n"
-                "Connect to a database via Settings to view permissions.",
-                font=("Segoe UI", 16),
-                justify="center",
-            )
-            label.pack(expand=True)
-        elif view_type == ViewType.TAGS:
+        if view_type == ViewType.TAGS:
             label = ttk.Label(
                 frame,
                 text="Tag Management View\n\n(Under Construction)",
