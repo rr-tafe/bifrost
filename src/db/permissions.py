@@ -15,12 +15,12 @@ Usage:
     )
     from src.db.connection import create_connection
     from src.models.permission import StagedChange, PermissionState, PermissionType
-    
+
     conn = create_connection(config)
     try:
         # Load all permissions
         assignments = fetch_all_permissions(conn)
-        
+
         # Apply changes
         change = StagedChange(
             user_login="alice",
@@ -50,27 +50,27 @@ from src.models.db_object import ObjectType
 def fetch_all_permissions(conn: pyodbc.Connection) -> list[PermissionAssignment]:
     """
     Fetch all object-level permissions for all users and objects.
-    
+
     Args:
         conn: Active database connection
-    
+
     Returns:
         list[PermissionAssignment]: All permission assignments (committed state only)
-    
+
     Query:
         Reads from sys.database_permissions JOIN sys.database_principals JOIN sys.objects
         where permission_name IN (SELECT, INSERT, UPDATE, DELETE, EXECUTE, ALTER, REFERENCES, VIEW DEFINITION).
-    
+
     State Mapping:
         - state = 'G' (Grant) → PermissionState.GRANT
         - state = 'D' (Deny) → PermissionState.DENY
         - Missing row → PermissionState.NONE (handled by matrix service)
-    
+
     Note:
         This returns only GRANT and DENY states. NONE states are implicit
         (absence of a row) and are filled by the matrix service when building
         the full user × object × permission grid.
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> assignments = fetch_all_permissions(conn)
@@ -103,9 +103,9 @@ def fetch_all_permissions(conn: pyodbc.Connection) -> list[PermissionAssignment]
               AND o.is_ms_shipped = 0
             ORDER BY pr.name, s.name, o.name, p.permission_name
         """
-        
+
         cursor.execute(query)
-        
+
         assignments = []
         for row in cursor.fetchall():
             # Map state_desc to PermissionState
@@ -121,14 +121,14 @@ def fetch_all_permissions(conn: pyodbc.Connection) -> list[PermissionAssignment]
             else:
                 # Unexpected state; log warning and skip
                 continue
-            
+
             # Map permission_name to PermissionType enum
             try:
                 permission_type = PermissionType(row.permission_name)
             except ValueError:
                 # Unsupported permission type; skip
                 continue
-            
+
             assignment = PermissionAssignment(
                 user_login=row.user_login,
                 schema_name=row.schema_name,
@@ -138,9 +138,9 @@ def fetch_all_permissions(conn: pyodbc.Connection) -> list[PermissionAssignment]
                 staged_state=None,  # No staged changes at load time
             )
             assignments.append(assignment)
-        
+
         return assignments
-    
+
     finally:
         cursor.close()
 
@@ -151,14 +151,14 @@ def fetch_permissions_for_user(
 ) -> list[PermissionAssignment]:
     """
     Fetch all object-level permissions for a specific user.
-    
+
     Args:
         conn: Active database connection
         user_login: Database principal login name
-    
+
     Returns:
         list[PermissionAssignment]: User's permission assignments
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> alice_perms = fetch_permissions_for_user(conn, "alice")
@@ -189,9 +189,9 @@ def fetch_permissions_for_user(
               AND o.is_ms_shipped = 0
             ORDER BY s.name, o.name, p.permission_name
         """
-        
+
         cursor.execute(query, (user_login,))
-        
+
         assignments = []
         for row in cursor.fetchall():
             state_desc = row.state_desc.strip()
@@ -201,12 +201,12 @@ def fetch_permissions_for_user(
                 committed_state = PermissionState.DENY
             else:
                 continue
-            
+
             try:
                 permission_type = PermissionType(row.permission_name)
             except ValueError:
                 continue
-            
+
             assignment = PermissionAssignment(
                 user_login=row.user_login,
                 schema_name=row.schema_name,
@@ -216,9 +216,9 @@ def fetch_permissions_for_user(
                 staged_state=None,
             )
             assignments.append(assignment)
-        
+
         return assignments
-    
+
     finally:
         cursor.close()
 
@@ -229,31 +229,31 @@ def apply_permission_changes(
 ) -> list[tuple[StagedChange, Optional[str]]]:
     """
     Apply a batch of permission changes to the database.
-    
+
     Args:
         conn: Active database connection
         changes: List of StagedChanges to apply
-    
+
     Returns:
         list[tuple[StagedChange, Optional[str]]]: List of (change, error_message) tuples.
             error_message is None for successful changes, contains error details for failures.
-    
+
     Behavior:
         - Applies each change independently (per FR-018: partial commit support)
         - Continues applying changes even if some fail
         - Returns detailed error information for each failure
         - Caller must commit transaction (conn.commit())
-    
+
     T-SQL Generation:
         - new_state = GRANT → GRANT {perm} ON {schema}.{object} TO [{user}]
         - new_state = DENY → DENY {perm} ON {schema}.{object} TO [{user}]
         - new_state = NONE → REVOKE {perm} ON {schema}.{object} FROM [{user}]
-    
+
     Error Handling:
         - Each change is applied in a try/except block
         - Failures are collected but don't stop remaining changes
         - Common errors: insufficient privileges, object doesn't exist, user doesn't exist
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> changes = [
@@ -277,7 +277,7 @@ def apply_permission_changes(
     """
     results = []
     cursor = conn.cursor()
-    
+
     try:
         for change in changes:
             try:
@@ -300,14 +300,14 @@ def apply_permission_changes(
                         ON [{change.schema_name}].[{change.object_name}]
                         FROM [{change.user_login}]
                     """
-                
+
                 cursor.execute(stmt)
                 results.append((change, None))  # Success
-            
+
             except pyodbc.Error as e:
                 # Extract user-friendly error message
                 error_msg = str(e)
-                
+
                 # Common error patterns
                 if "permission denied" in error_msg.lower() or "insufficient privilege" in error_msg.lower():
                     friendly_error = (
@@ -321,11 +321,11 @@ def apply_permission_changes(
                     )
                 else:
                     friendly_error = f"Database error: {error_msg}"
-                
+
                 results.append((change, friendly_error))  # Failure
-        
+
         return results
-    
+
     finally:
         cursor.close()
 
@@ -333,23 +333,23 @@ def apply_permission_changes(
 def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str, PermissionType]]:
     """
     Get the set of permissions the current administrator possesses.
-    
+
     Args:
         conn: Active database connection
-    
+
     Returns:
         set[tuple[str, str, PermissionType]]: Set of (schema_name, object_name, permission_type)
             tuples representing permissions the administrator holds.
-    
+
     Used for privilege validation at staging time (FR-017a):
         - Before staging a GRANT, validate the administrator possesses that permission
         - Cached in memory after first query
         - Refreshed on manual refresh (F5)
-    
+
     Query:
         Uses IS_MEMBER() to check role membership and sys.database_permissions
         for explicit grants to the current user (SYSTEM_USER).
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> admin_perms = get_administrator_permissions(conn)
@@ -361,7 +361,7 @@ def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str
         # Get current user's login name
         cursor.execute("SELECT SYSTEM_USER")
         admin_login = cursor.fetchone()[0]
-        
+
         # Fetch administrator's permissions
         # Include both direct grants and role-based grants (if db_owner/sysadmin)
         query = """
@@ -383,9 +383,9 @@ def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str
               )
               AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
         """
-        
+
         cursor.execute(query, (admin_login,))
-        
+
         permissions = set()
         for row in cursor.fetchall():
             try:
@@ -393,8 +393,8 @@ def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str
                 permissions.add((row.schema_name, row.object_name, perm_type))
             except ValueError:
                 continue
-        
+
         return permissions
-    
+
     finally:
         cursor.close()

@@ -22,7 +22,7 @@ Administrator Permissions Required:
 Usage:
     from src.db.connection import create_connection, test_connection
     from src.models.config import Configuration
-    
+
     config = Configuration(
         server="SQLSERVER01",
         port=1433,
@@ -30,12 +30,12 @@ Usage:
         schema="dbo",
         auth_type="windows"
     )
-    
+
     # Test connection (returns error message or None)
     error = test_connection(config)
     if error:
         print(f"Connection failed: {error}")
-    
+
     # Create connection (raises on failure)
     conn = create_connection(config)
     try:
@@ -53,11 +53,11 @@ from src.models.config import Configuration
 
 class DatabaseConnectionError(Exception):
     """Raised when database connection fails."""
-    
+
     def __init__(self, message: str, original_error: Optional[Exception] = None):
         """
         Initialize database connection error.
-        
+
         Args:
             message: User-friendly error message
             original_error: Original exception from pyodbc (if any)
@@ -69,17 +69,17 @@ class DatabaseConnectionError(Exception):
 def create_connection(config: Configuration) -> pyodbc.Connection:
     """
     Create a SQL Server connection using the provided configuration.
-    
+
     Args:
         config: Configuration with server, port, database, auth settings
-    
+
     Returns:
         pyodbc.Connection: Active database connection
-    
+
     Raises:
         DatabaseConnectionError: If connection fails
         ValueError: If configuration is invalid
-    
+
     Connection String Format:
         DRIVER={ODBC Driver 18 for SQL Server};
         SERVER=<server>,<port>;
@@ -87,13 +87,13 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
         Trusted_Connection=yes;
         TrustServerCertificate=yes;
         Encrypt=yes;
-    
+
     Note:
         - TrustServerCertificate=yes allows self-signed certificates (common in dev/test)
         - Encrypt=yes enforces encrypted connection
         - Trusted_Connection=yes uses current Windows identity
         - No username/password in connection string
-    
+
     Example:
         >>> config = Configuration(server="localhost", database="MyDB")
         >>> conn = create_connection(config)
@@ -106,7 +106,7 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
     validation_errors = config.validate()
     if validation_errors:
         raise ValueError(f"Invalid configuration: {', '.join(validation_errors)}")
-    
+
     # Build connection string for Windows Authentication
     connection_string = (
         f"DRIVER={{ODBC Driver 18 for SQL Server}};"
@@ -116,16 +116,16 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
         f"TrustServerCertificate=yes;"
         f"Encrypt=yes;"
     )
-    
+
     try:
         conn = pyodbc.connect(connection_string, timeout=10)
         conn.autocommit = False  # Explicit transaction control for commit/rollback
         return conn
-    
+
     except pyodbc.Error as e:
         # Extract user-friendly error message from pyodbc error
         error_message = str(e)
-        
+
         # Common error patterns and user-friendly messages
         if "Login failed" in error_message or "authentication failed" in error_message.lower():
             friendly_message = (
@@ -147,23 +147,23 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
         else:
             # Generic error with original message
             friendly_message = f"Database connection failed: {error_message}"
-        
+
         raise DatabaseConnectionError(friendly_message, original_error=e)
 
 
 def test_connection(config: Configuration) -> Optional[str]:
     """
     Test database connection and return error message if it fails.
-    
+
     Args:
         config: Configuration to test
-    
+
     Returns:
         Optional[str]: Error message if connection fails, None if successful
-    
+
     This is a non-raising version of create_connection() for use in the Settings UI
     where we want to show validation feedback without exception handling.
-    
+
     Example:
         >>> config = Configuration(server="invalid", database="test")
         >>> error = test_connection(config)
@@ -175,10 +175,10 @@ def test_connection(config: Configuration) -> Optional[str]:
         conn = create_connection(config)
         conn.close()
         return None
-    
+
     except (DatabaseConnectionError, ValueError) as e:
         return str(e)
-    
+
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
@@ -186,15 +186,15 @@ def test_connection(config: Configuration) -> Optional[str]:
 def get_current_user(conn: pyodbc.Connection) -> str:
     """
     Get the current SQL Server user identity (SYSTEM_USER).
-    
+
     Args:
         conn: Active database connection
-    
+
     Returns:
         str: Current user identity (e.g., "DOMAIN\\username")
-    
+
     This is used for populating the 'administrator' field in audit log entries.
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> user = get_current_user(conn)
@@ -213,26 +213,26 @@ def get_current_user(conn: pyodbc.Connection) -> str:
 def ensure_schema_exists(conn: pyodbc.Connection, schema_name: str) -> None:
     """
     Ensure the specified schema exists, creating it if necessary.
-    
+
     Args:
         conn: Active database connection
         schema_name: Schema name to check/create
-    
+
     Raises:
         DatabaseConnectionError: If schema creation fails
-    
+
     Note:
         - Skipped if schema is 'dbo' (always exists)
         - Requires CREATE SCHEMA permission
         - Part of the startup sequence (called before audit log table check)
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> ensure_schema_exists(conn, "bifrost")
     """
     if schema_name.lower() == "dbo":
         return  # dbo always exists
-    
+
     cursor = conn.cursor()
     try:
         # Check if schema exists
@@ -240,26 +240,26 @@ def ensure_schema_exists(conn: pyodbc.Connection, schema_name: str) -> None:
             "SELECT 1 FROM sys.schemas WHERE name = ?",
             (schema_name,)
         )
-        
+
         if cursor.fetchone():
             return  # Schema already exists
-        
+
         # Create schema
         # Cannot use parameterized query for DDL, so validate schema name first
         import re
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema_name):
             raise ValueError(f"Invalid schema name: {schema_name}")
-        
+
         cursor.execute(f"CREATE SCHEMA [{schema_name}]")
         conn.commit()
-    
+
     except pyodbc.Error as e:
         conn.rollback()
         raise DatabaseConnectionError(
             f"Failed to create schema '{schema_name}': {str(e)}",
             original_error=e
         )
-    
+
     finally:
         cursor.close()
 
@@ -267,13 +267,13 @@ def ensure_schema_exists(conn: pyodbc.Connection, schema_name: str) -> None:
 def get_server_version(conn: pyodbc.Connection) -> str:
     """
     Get SQL Server version information.
-    
+
     Args:
         conn: Active database connection
-    
+
     Returns:
         str: SQL Server version string
-    
+
     Example:
         >>> conn = create_connection(config)
         >>> version = get_server_version(conn)

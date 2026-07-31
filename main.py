@@ -31,25 +31,25 @@ from pathlib import Path
 def main():
     """
     Main entry point for the Bifrost application.
-    
+
     Initializes the Tk root window, loads configuration, establishes database
     connection, and shows the appropriate initial view (Matrix or Settings).
-    
+
     Returns:
         int: Exit code (0 for success, non-zero for errors)
     """
     # Create root Tkinter window
     root = tk.Tk()
     root.title("Bifrost - SQL Server Permissions Manager")
-    
+
     # Set minimum window size
     root.minsize(1024, 768)
-    
+
     # TODO: Import and initialize the main application controller
     # This will be implemented in src/ui/app.py (Task T015)
     # from src.ui.app import App
     # app = App(root)
-    
+
     # Placeholder: Show a simple window until the app is implemented
     label = tk.Label(
         root,
@@ -60,10 +60,10 @@ def main():
         pady=50
     )
     label.pack(expand=True)
-    
+
     # Start the Tkinter event loop
     root.mainloop()
-    
+
     return 0
 
 

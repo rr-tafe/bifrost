@@ -31,7 +31,7 @@ from datetime import datetime
 class AuditEntry:
     """
     Immutable record of a single committed permission change.
-    
+
     Attributes:
         id: Auto-generated primary key (BIGINT IDENTITY)
         administrator: SQL Server identity of the connected admin (SYSTEM_USER)
@@ -44,23 +44,23 @@ class AuditEntry:
         new_state: State after the change (GRANT, DENY, or NONE)
         changed_at: UTC timestamp when change was committed (set by SQL Server)
         explanation: Auto-generated description of the change
-    
+
     Explanation format (FR-012):
         "{action} {permission_type} on {schema}.{object_name} to {affected_user}"
-        
+
         Examples:
             "GRANT SELECT on dbo.Orders to alice"
             "REVOKE DELETE on dbo.Products from mjones"
             "DENY EXECUTE on dbo.GetReportData to guest"
-    
+
     Table: <config.schema>.Bifrost_audit_log
-    
+
     Action derivation:
         - new_state = GRANT → action = "GRANT"
         - new_state = DENY → action = "DENY"
         - new_state = NONE → action = "REVOKE"
     """
-    
+
     id: int
     administrator: str
     affected_user: str
@@ -72,7 +72,7 @@ class AuditEntry:
     new_state: str  # GRANT | DENY | NONE
     changed_at: datetime
     explanation: str
-    
+
     @classmethod
     def generate_explanation(
         cls,
@@ -84,35 +84,35 @@ class AuditEntry:
     ) -> str:
         """
         Generate the explanation string for an audit entry per FR-012.
-        
+
         Args:
             action: GRANT, DENY, or REVOKE
             permission_type: Permission name (e.g., SELECT, EXECUTE)
             schema_name: Schema of the target object
             object_name: Name of the target object
             affected_user: Database principal receiving the change
-        
+
         Returns:
             str: Formatted explanation string
-        
+
         Format:
             "{action} {permission_type} on {schema}.{object} to/from {user}"
-            
+
         Examples:
             >>> AuditEntry.generate_explanation("GRANT", "SELECT", "dbo", "Orders", "alice")
             "GRANT SELECT on dbo.Orders to alice"
-            
+
             >>> AuditEntry.generate_explanation("REVOKE", "DELETE", "dbo", "Products", "bob")
             "REVOKE DELETE on dbo.Products from bob"
         """
         # Use "to" for GRANT/DENY, "from" for REVOKE
         preposition = "to" if action in ("GRANT", "DENY") else "from"
-        
+
         return (
             f"{action} {permission_type} on {schema_name}.{object_name} "
             f"{preposition} {affected_user}"
         )
-    
+
     @classmethod
     def from_staged_change(
         cls,
@@ -123,13 +123,13 @@ class AuditEntry:
     ) -> "AuditEntry":
         """
         Create an AuditEntry from a committed StagedChange.
-        
+
         Args:
             change: The StagedChange that was committed
             administrator: SYSTEM_USER identity of the committing admin
             entry_id: Auto-generated ID from the database
             changed_at: UTC timestamp from the database
-        
+
         Returns:
             AuditEntry: New audit entry instance
         """
@@ -140,7 +140,7 @@ class AuditEntry:
             object_name=change.object_name,
             affected_user=change.user_login,
         )
-        
+
         return cls(
             id=entry_id,
             administrator=administrator,
