@@ -108,9 +108,33 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
     if validation_errors:
         raise ValueError(f"Invalid configuration: {', '.join(validation_errors)}")
 
+    # Find the best available SQL Server ODBC driver
+    available_drivers = pyodbc.drivers()
+    driver = None
+    
+    # Prefer newer drivers
+    preferred_drivers = [
+        "ODBC Driver 18 for SQL Server",
+        "ODBC Driver 17 for SQL Server",
+        "ODBC Driver 13 for SQL Server",
+        "SQL Server Native Client 11.0",
+        "SQL Server",
+    ]
+    
+    for preferred in preferred_drivers:
+        if preferred in available_drivers:
+            driver = preferred
+            break
+    
+    if not driver:
+        raise DatabaseConnectionError(
+            "No SQL Server ODBC driver found. Please install 'ODBC Driver 17 for SQL Server' "
+            "or 'ODBC Driver 18 for SQL Server' from Microsoft."
+        )
+
     # Build connection string for Windows Authentication
     connection_string = (
-        f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+        f"DRIVER={{{driver}}};"
         f"SERVER={config.server},{config.port};"
         f"DATABASE={config.database};"
         f"Trusted_Connection=yes;"
