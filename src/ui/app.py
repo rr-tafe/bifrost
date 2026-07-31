@@ -437,9 +437,6 @@ class BifrostApp(tk.Tk):
         try:
             from src.db.audit import ensure_audit_log_table
             from src.db.connection import create_connection, get_current_user
-            from src.db.objects import fetch_all_objects
-            from src.db.permissions import fetch_all_permissions
-            from src.db.users import fetch_all_users
 
             # Create connection
             self.connection = create_connection(self.config)
@@ -450,14 +447,9 @@ class BifrostApp(tk.Tk):
             # Get current user
             current_user = get_current_user(self.connection)
 
-            # Load data
-            users = fetch_all_users(self.connection)
-            objects = fetch_all_objects(self.connection)
-            permissions = fetch_all_permissions(self.connection)
-
-            # Build permission matrix
-            self.matrix = PermissionMatrix()
-            self.matrix.load(users, objects, permissions)
+            # Build permission matrix (loads users, objects, permissions internally)
+            self.matrix = PermissionMatrix(self.connection, self.config.schema)
+            self.matrix.load()
 
             # Update UI
             self._update_connection_status(connected=True)
@@ -471,7 +463,7 @@ class BifrostApp(tk.Tk):
             self.switch_view(ViewType.MATRIX)
 
             # Then update views with data (now that they exist)
-            self._update_views_with_data(users, objects)
+            self._update_views_with_data(self.matrix.users, self.matrix.objects)
 
             self.set_status(f"Connected as {current_user}")
 
@@ -780,31 +772,13 @@ class BifrostApp(tk.Tk):
         self.set_status("Refreshing...")
 
         try:
-            from src.db.objects import fetch_all_objects
-            from src.db.permissions import fetch_all_permissions
-            from src.db.users import fetch_all_users
-
-            # Reload data
-            users = fetch_all_users(self.connection)
-            objects = fetch_all_objects(self.connection)
-            permissions = fetch_all_permissions(self.connection)
-
-            # Rebuild matrix (preserves staged changes)
+            # Matrix.refresh() reloads from DB and preserves staged changes
             if hasattr(self, "matrix") and self.matrix:
-                staged = self.matrix.get_staged_changes()
-                self.matrix.load(users, objects, permissions)
-                # Reapply staged changes
-                for change in staged:
-                    self.matrix.stage_change(
-                        change.user,
-                        change.schema_name,
-                        change.object_name,
-                        change.permission_type,
-                        change.new_state,
-                    )
+                self.matrix.refresh()
 
-            # Update views
-            self._update_views_with_data(users, objects)
+            # Update views with fresh data
+            if self.matrix:
+                self._update_views_with_data(self.matrix.users, self.matrix.objects)
 
             # Refresh current view
             if self.current_view in self._views:
