@@ -46,9 +46,9 @@ def fetch_all_users(conn: pyodbc.Connection) -> list[DatabaseUser]:
     Columns:
         - name → login_name, display_name
         - type → principal_type
-        - is_disabled → is_disabled
 
-    Tags:
+    Note:
+        is_disabled is not available in sys.database_principals, so defaults to False.
         Tags are loaded separately from tags.json by the TagStore service.
 
     Example:
@@ -64,8 +64,7 @@ def fetch_all_users(conn: pyodbc.Connection) -> list[DatabaseUser]:
         query = """
             SELECT
                 name,
-                type,
-                is_disabled
+                type
             FROM sys.database_principals
             WHERE type IN ('S', 'U', 'G')
               AND principal_id > 4
@@ -81,7 +80,7 @@ def fetch_all_users(conn: pyodbc.Connection) -> list[DatabaseUser]:
                 login_name=row.name,
                 display_name=row.name,
                 principal_type=row.type.strip(),  # Strip whitespace from CHAR(1)
-                is_disabled=row.is_disabled,
+                is_disabled=False,  # Not available in sys.database_principals
                 tags=[],  # Tags loaded separately by TagStore
             )
             users.append(user)
@@ -117,8 +116,7 @@ def fetch_user_by_login(conn: pyodbc.Connection, login_name: str) -> Optional[Da
         query = """
             SELECT
                 name,
-                type,
-                is_disabled
+                type
             FROM sys.database_principals
             WHERE type IN ('S', 'U', 'G')
               AND principal_id > 4
@@ -135,7 +133,7 @@ def fetch_user_by_login(conn: pyodbc.Connection, login_name: str) -> Optional[Da
             login_name=row.name,
             display_name=row.name,
             principal_type=row.type.strip(),
-            is_disabled=row.is_disabled,
+            is_disabled=False,  # Not available in sys.database_principals
             tags=[],
         )
 
