@@ -30,6 +30,7 @@ from src.services.config import load_config
 from src.services.tags import TagStore
 from src.ui.views.matrix import MatrixView
 from src.ui.views.settings import SettingsView
+from src.ui.views.tags import TagsView
 
 
 class ViewType:
@@ -485,18 +486,20 @@ class BifrostApp(tk.Tk):
                 on_cancel=self._cancel_changes,
             )
 
+        if view_type == ViewType.TAGS:
+            view = TagsView(
+                self._view_container,
+                tag_store=self.tag_store,
+                users=[],  # Will be populated when connected
+                objects=[],
+            )
+            view.refresh()
+            return view
+
         # Placeholder frames for views not yet implemented
         frame = ttk.Frame(self._view_container)
 
-        if view_type == ViewType.TAGS:
-            label = ttk.Label(
-                frame,
-                text="Tag Management View\n\n(Under Construction)",
-                font=("Segoe UI", 16),
-                justify="center",
-            )
-            label.pack(expand=True)
-        elif view_type == ViewType.AUDIT:
+        if view_type == ViewType.AUDIT:
             label = ttk.Label(
                 frame,
                 text="Audit Log View\n\n(Under Construction)",
