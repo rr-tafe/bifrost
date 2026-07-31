@@ -63,3 +63,4 @@ config.json
 
 # Project-specific
 *.tmp
+ux-ui-mastery/

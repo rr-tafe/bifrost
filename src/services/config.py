@@ -30,9 +30,12 @@ from typing import Optional
 from src.models.config import Configuration
 
 
-def load_config() -> tuple[Configuration, Optional[str]]:
+def load_config(path: Optional[Path] = None) -> tuple[Configuration, Optional[str]]:
     """
-    Load configuration from %APPDATA%/Bifrost/config.json.
+    Load configuration from %APPDATA%/Bifrost/config.json or a custom path.
+
+    Args:
+        path: Optional custom path (defaults to %APPDATA%/Bifrost/config.json)
 
     Returns:
         tuple[Configuration, Optional[str]]: (config, error_message)
@@ -55,7 +58,7 @@ def load_config() -> tuple[Configuration, Optional[str]]:
         ...     print(f"Loaded config for server: {config.server}")
     """
     try:
-        config_path = Configuration.get_config_path()
+        config_path = path if path else Configuration.get_config_path()
 
         if not config_path.exists():
             return (
@@ -98,18 +101,19 @@ def load_config() -> tuple[Configuration, Optional[str]]:
         )
 
 
-def save_config(config: Configuration) -> Optional[str]:
+def save_config(config: Configuration, path: Optional[Path] = None) -> Optional[str]:
     """
-    Save configuration to %APPDATA%/Bifrost/config.json.
+    Save configuration to %APPDATA%/Bifrost/config.json or a custom path.
 
     Args:
         config: Configuration to save
+        path: Optional custom path (defaults to %APPDATA%/Bifrost/config.json)
 
     Returns:
         Optional[str]: Error message if save failed, None if successful
 
     Behavior:
-        - Creates %APPDATA%/Bifrost/ directory if it doesn't exist
+        - Creates parent directory if it doesn't exist
         - Validates configuration before saving
         - Writes JSON with 2-space indentation for readability
         - Sets file permissions to user-only (read/write)
@@ -129,7 +133,7 @@ def save_config(config: Configuration) -> Optional[str]:
             error_summary = "; ".join(validation_errors)
             return f"Cannot save invalid configuration: {error_summary}"
 
-        config_path = Configuration.get_config_path()
+        config_path = path if path else Configuration.get_config_path()
 
         # Ensure parent directory exists
         config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,9 +158,12 @@ def save_config(config: Configuration) -> Optional[str]:
         return f"Failed to save configuration: {str(e)}"
 
 
-def config_exists() -> bool:
+def config_exists(path: Optional[Path] = None) -> bool:
     """
     Check if config.json exists.
+
+    Args:
+        path: Optional custom path (defaults to %APPDATA%/Bifrost/config.json)
 
     Returns:
         bool: True if config file exists, False otherwise
@@ -168,7 +175,7 @@ def config_exists() -> bool:
         ...     print("First run - show Settings view")
     """
     try:
-        config_path = Configuration.get_config_path()
+        config_path = path if path else Configuration.get_config_path()
         return config_path.exists()
     except Exception:
         return False

@@ -286,9 +286,60 @@ class TagStore:
 
         return all_tags
 
-    def save(self) -> Optional[str]:
+    def get_users_with_tag(self, tag: str) -> list[str]:
         """
-        Save tag store to %APPDATA%/Bifrost/tags.json.
+        Get all users that have a specific tag (case-insensitive match).
+
+        Args:
+            tag: Tag to search for
+
+        Returns:
+            list[str]: List of login names that have the tag
+
+        Example:
+            >>> store = TagStore()
+            >>> store.add_user_tag("alice", "finance")
+            >>> store.add_user_tag("bob", "finance")
+            >>> store.get_users_with_tag("finance")
+            ['alice', 'bob']
+        """
+        tag_lower = tag.lower()
+        return [
+            login_name
+            for login_name, tags in self.user_tags.items()
+            if any(t.lower() == tag_lower for t in tags)
+        ]
+
+    def get_objects_with_tag(self, tag: str) -> list[str]:
+        """
+        Get all objects that have a specific tag (case-insensitive match).
+
+        Args:
+            tag: Tag to search for
+
+        Returns:
+            list[str]: List of full names (schema.object) that have the tag
+
+        Example:
+            >>> store = TagStore()
+            >>> store.add_object_tag("dbo.Orders", "critical")
+            >>> store.add_object_tag("dbo.Products", "critical")
+            >>> store.get_objects_with_tag("critical")
+            ['dbo.Orders', 'dbo.Products']
+        """
+        tag_lower = tag.lower()
+        return [
+            full_name
+            for full_name, tags in self.object_tags.items()
+            if any(t.lower() == tag_lower for t in tags)
+        ]
+
+    def save(self, path: Optional[Path] = None) -> Optional[str]:
+        """
+        Save tag store to %APPDATA%/Bifrost/tags.json or a custom path.
+
+        Args:
+            path: Optional custom path (defaults to %APPDATA%/Bifrost/tags.json)
 
         Returns:
             Optional[str]: Error message if save failed, None if successful
@@ -301,7 +352,7 @@ class TagStore:
             ...     print(f"Save failed: {error}")
         """
         try:
-            tags_path = self.get_tags_path()
+            tags_path = path if path else self.get_tags_path()
 
             # Ensure parent directory exists
             tags_path.parent.mkdir(parents=True, exist_ok=True)
@@ -325,9 +376,12 @@ class TagStore:
             return f"Failed to save tags: {str(e)}"
 
     @classmethod
-    def load(cls) -> "TagStore":
+    def load(cls, path: Optional[Path] = None) -> "TagStore":
         """
-        Load tag store from %APPDATA%/Bifrost/tags.json.
+        Load tag store from %APPDATA%/Bifrost/tags.json or a custom path.
+
+        Args:
+            path: Optional custom path (defaults to %APPDATA%/Bifrost/tags.json)
 
         Returns:
             TagStore: Loaded tag store (empty if file missing or corrupt)
@@ -344,7 +398,7 @@ class TagStore:
         store = cls()
 
         try:
-            tags_path = cls.get_tags_path()
+            tags_path = path if path else cls.get_tags_path()
 
             if not tags_path.exists():
                 return store  # Empty store

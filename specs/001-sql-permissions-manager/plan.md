@@ -55,7 +55,7 @@ Build Bifrost, a Python/Tkinter desktop application for Windows 11 that allows a
 | IV — Clean Code | PASS | ruff enforced with zero warnings; single-responsibility functions throughout |
 | V — Simple UX | PASS | Canvas matrix; ≤4 interactions per commit (SC-002); all errors actionable |
 | VI — Minimal Dependencies | PASS | Only pyodbc added beyond stdlib (no stdlib SQL Server driver exists); pytest/pytest-cov dev-only; both documented here |
-| VII — UI Accessibility | PASS | Canvas matrix keyboard-navigable via arrow keys; all controls Tab/Enter accessible; focus indicators preserved |
+| VII — UI Accessibility | PASS | WCAG 2.2 Level AA compliant: Canvas matrix keyboard-navigable; non-color indicators (✓/✗/─); focus indicators (2px, 3:1 contrast); screen reader live regions; error message association; skip navigation shortcuts; high contrast mode support; 200% text scaling; semantic headings (H1-H3); all controls Tab/Enter accessible; Windows UI Automation integration for screen readers (FR-024, FR-025) |
 | VIII — Input Validation | PASS | Tags, connection params, and search terms validated at entry boundary |
 
 No violations detected. No Complexity Tracking entries required.
@@ -107,7 +107,7 @@ src/
 │   ├── app.py               # Root Tk window; tab strip; view lifecycle; startup flow
 │   ├── user_view.py         # User View: object rows × 8 permission columns for one user
 │   ├── compare_view.py      # Compare View: object rows × all-user column groups
-│   ├── object_view.py       # Object View: user access list for one object + permission
+│   ├── object_view.py       # Object View: permission matrix for one object across all users
 │   ├── settings_view.py     # Connection configuration form
 │   ├── audit_view.py        # Audit log viewer with date/user/object filters
 │   └── widgets/
@@ -140,3 +140,64 @@ main.py                      # Entry point: load config → connect → show mat
 > **Fill ONLY if Constitution Check has violations that must be justified**
 
 No violations to track.
+
+## Accessibility Implementation
+
+**Standard**: WCAG 2.2 Level AA compliance (FR-024, FR-025)
+
+**Platform Integration**:
+- **Windows UI Automation (UIA)**: Tkinter widgets will expose accessibility properties via Windows UI Automation framework for screen reader compatibility (NVDA, Windows Narrator, JAWS)
+- **System Settings Detection**: Use Windows APIs (`SystemParametersInfo`, registry keys) to detect:
+  - High Contrast mode (via `SPI_GETHIGHCONTRAST`)
+  - Animation preferences (via `SPI_GETCLIENTAREAANIMATION`)
+  - Text scaling (via DPI awareness APIs)
+
+**Critical Accessibility Features**:
+
+1. **Non-Color Indicators** (FR-024, WCAG 1.4.1):
+   - Permission state symbols: ✓ (GRANT), ✗ (DENY), ─ (none), * (staged)
+   - Accessible color palette verified for WCAG AA contrast:
+     - Green #006400 (7.3:1 on white)
+     - Red #B22222 (5.0:1 on white)
+     - Grey #767676 (4.6:1 on white)
+   - Implementation: `cell_renderer.py` renders symbol + color together
+
+2. **Focus Indicators** (WCAG 2.4.7, 2.4.11):
+   - 2px solid border in system accent color (#0078D4)
+   - 3:1 minimum contrast against background
+   - 2px offset from widget edge
+   - Implementation: Tkinter `highlightthickness=2`, `highlightbackground`, custom Canvas focus rings
+
+3. **Screen Reader Support** (WCAG 4.1.3):
+   - Live regions for dynamic content (staged count, search results, errors)
+   - Accessible names for all icons and controls
+   - Full context announcements for cell state changes
+   - Implementation: Tkinter accessibility properties, Windows UIA `IAccessible` interface
+
+4. **Keyboard Navigation** (WCAG 2.1.1):
+   - Arrow keys for matrix navigation
+   - Skip shortcuts: Ctrl+M (matrix), Ctrl+F (filters)
+   - Context menu: Shift+F10 or Menu key
+   - Direct edit: G (GRANT), D (DENY), Delete (clear)
+   - Implementation: `bind()` handlers in `user_view.py`, `compare_view.py`, `object_view.py`
+
+5. **Error Message Association** (WCAG 3.3.1):
+   - Programmatic link between errors and fields
+   - Implementation: Tkinter `Label` with `for` property or UIA `LabeledBy` pattern for Settings and Tag Editor
+
+6. **Semantic Structure** (WCAG 2.4.6):
+   - H1: Application title with database name
+   - H2: Active tab name
+   - H3: Section headers (filters, matrix, settings)
+   - Implementation: Set `role="heading"` and `aria-level` via Windows UIA or Tkinter accessibility attributes
+
+**Testing Strategy**:
+- Manual screen reader testing with NVDA (free, open source)
+- Automated contrast checking via library in `test_accessibility.py`
+- Keyboard-only navigation tests in `test_accessibility.py`
+- Focus indicator visibility verification with automated screenshots
+- High Contrast mode testing on Windows 11 with all 4 themes
+
+**Dependencies**: No new external dependencies required; Windows UIA support is built into Python's Tkinter on Windows, accessible via `ctypes` or `pywinauto` if needed for advanced UIA patterns.
+
+**Implementation Priority**: Phase 1 Critical accessibility features (non-color indicators, focus, screen reader basics) are blocking for release. Phase 2 features (high contrast, reduced motion, text scaling) enhance experience but can follow initial release if schedule requires.

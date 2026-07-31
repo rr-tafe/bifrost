@@ -52,35 +52,39 @@ log entries appear only after a successful commit.
 
 ---
 
-### User Story 1b - Object View: Manage Access List by Object + Permission (Priority: P1)
+### User Story 1b - Object View: Manage Permissions by Object Across All Users (Priority: P1)
 
-When an administrator needs to answer "who has SELECT on dbo.Orders?" or quickly grant a
-permission to several users for a specific object, they switch to the Object View. They select
-a database object and a permission type; the view shows every user split into two sections —
-those with an explicit GRANT or DENY above a divider, and those with no explicit assignment
-below. The administrator can change any user's state via a per-row dropdown, or click
-[+ Add User...] to search for a user and add them to the explicit list (defaulting to GRANT).
-All changes are staged to the shared staging area and committed or cancelled via the global
-Commit / Cancel controls.
+When an administrator needs to review or manage all permissions for a specific database object
+across all users at once, they switch to the Object View. They select a database object; the
+view displays a permission matrix with all users in rows and all permission types (SELECT,
+INSERT, UPDATE, DELETE, EXECUTE, ALTER, REFERENCES, VIEW DEFINITION) in columns. Each cell
+shows the current committed permission state (GRANT, DENY, or none) and can be toggled directly.
+The administrator can answer questions like "who has SELECT on dbo.Orders?" or "who has any
+permission on dbo.Customers?" at a glance, and make bulk permission changes for multiple users
+on the same object without switching views. All changes are staged to the shared staging area
+and committed or cancelled via the global Commit / Cancel controls.
 
 **Why this priority**: Complements the User View (US1) — together they give administrators
-maximum flexibility to manage permissions either per-user or per-object+permission.
+maximum flexibility to manage permissions either per-user across all objects, or per-object
+across all users. The matrix layout for Object View provides the same immediate visibility
+and direct-manipulation interaction as the User View and Compare View.
 
-**Independent Test**: Can be tested independently by selecting an object + permission type,
-verifying the correct user list appears, changing states, adding a user, committing, and
-confirming the database reflects the changes and the audit log records them.
+**Independent Test**: Can be tested independently by selecting an object, verifying the correct
+user × permission matrix appears, changing multiple cells across different users and permissions,
+committing, and confirming the database reflects the changes and the audit log records each
+changed permission.
 
 **Acceptance Scenarios**:
 
-1. **Given** an object and permission type are selected in the Object View, **When** the view
-   loads, **Then** all users with an explicit GRANT or DENY appear above the divider; all
-   users with no explicit assignment appear below; the divider is clearly labelled.
-2. **Given** a user's State dropdown is changed from none to GRANT, **When** the change is
-   staged, **Then** the user row moves above the divider with a pending `*GRANT` indicator
-   and the global staged-change count increments by one.
-3. **Given** [+ Add User...] is clicked, **When** the administrator selects a user from the
-   picker, **Then** the user appears at the top of the explicit-assignment section with
-   `*GRANT` staged; the staged-change count increments.
+1. **Given** a database object is selected in the Object View, **When** the view loads, **Then**
+   all users appear in rows with all applicable permission types in columns; each cell shows
+   the current committed state (GRANT, DENY, or none) for that user-object-permission
+   combination.
+2. **Given** a cell is toggled from none to GRANT, **When** the change is staged, **Then** the
+   cell shows a pending `*GRANT` indicator and the global staged-change count increments by one.
+3. **Given** the administrator clicks on a permission column header (e.g., SELECT), **When**
+   cross-query highlight is activated, **Then** all user rows where that user holds a committed
+   SELECT permission on the selected object are highlighted; other rows are dimmed.
 4. **Given** staged changes exist in the Object View, **When** the administrator switches to
    the User View or Compare View, **Then** those changes remain staged and are visible as
    pending cells in the other views.
@@ -122,7 +126,7 @@ affecting the underlying permission data.
 To organise users and database objects into logical groups, the administrator assigns custom
 tags (e.g., "finance", "readonly", "tier1") to any user or object. Tags are alphanumeric with
 no spaces. Once tagged, the administrator can filter the entire matrix to show only tagged
-entities, making bulk review and management faster. The administrator can also add metadata 
+entities, making bulk review and management faster. The administrator can also add metadata
 to tables, views, functions, etc. explaining what they do - as a form of DB-level documentation.
 
 **Why this priority**: Tags provide the organisational layer needed to manage large databases
@@ -259,21 +263,30 @@ relaunching the app, and confirming it reconnects without requesting credentials
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST provide three distinct permission management views, all operating
-  on the same shared staging area and accessible via tabs:
-  - **User View**: displays all database objects as rows and all 8 permission types as columns
-    for one selected user at a time; the administrator selects a user from a dropdown and edits
+- **FR-001**: The system MUST provide a unified matrix view with three perspective modes, all
+  operating on the same shared in-memory permission matrix with a unified staging and commit
+  model:
+  - **Single User mode**: displays all database objects as rows and all 8 permission types as
+    columns for one selected user; the administrator selects a user from a dropdown and edits
     that user's permissions across all objects.
-  - **Compare View**: displays all database objects as rows and all database users as column
-    groups (each group containing the 8 permission sub-columns); all users are visible
-    simultaneously with horizontal scrolling; tag and search filters narrow both rows and
-    columns.
-  - **Object View**: displays all database users as rows for a selected object and permission
-    type combination; the administrator selects one object and one permission type, sees every
-    user's state (GRANT / DENY / none) for that combination, and can add users to the explicit
-    access list (defaulting to GRANT) or change existing states.
-  In all three views, each permission state MUST be shown as one of: GRANT (explicitly allowed),
-  DENY (explicitly blocked), or none (no explicit assignment).
+  - **All Users (Compare) mode**: displays all database objects as rows and user column groups
+    (each group containing the 8 permission sub-columns); users are displayed in paginated sets
+    (default 10 per page) with horizontal scrolling; tag and search filters narrow both rows
+    and columns; user pinning allows frequently accessed users to remain visible across pages.
+  - **Object View mode**: displays a permission matrix with all users in rows and all permission
+    types in columns for a selected object; the administrator selects one object, sees every
+    user's permission state (GRANT / DENY / none) across all 8 permission types in a matrix
+    layout, and can toggle any cell to change that user-object-permission combination.
+  The administrator switches perspectives in-place via view controls (user selector, "Show:
+  Single user / All users" toggle, object selector) without losing context; scroll position and
+  cell focus are preserved when pivoting between modes. An orientation banner displays current
+  context (selected user/object, filter state, visible counts, staged changes). All modes
+  display both committed state and pending staged changes; any change staged in one mode
+  immediately appears as pending in other modes.
+- **FR-001a**: The system MUST display only permission types that are applicable to each
+  database object type: tables and views support SELECT, INSERT, UPDATE, DELETE, ALTER,
+  REFERENCES, and VIEW DEFINITION; stored procedures and functions support EXECUTE, ALTER,
+  and VIEW DEFINITION. Non-applicable permissions MUST be hidden or disabled in the UI.
 - **FR-002**: The system MUST allow the administrator to stage permission state changes in the
   matrix (GRANT / DENY / none) without immediately applying them to the database; staged
   cells MUST be visually distinct from committed cells so pending changes are obvious at a
@@ -282,12 +295,13 @@ relaunching the app, and confirming it reconnects without requesting credentials
   database in a single operation and a Cancel control that discards all staged changes and
   restores the matrix to its last committed state; both controls MUST be disabled when no
   changes are staged.
-- **FR-003**: The system MUST support cross-query highlighting in the User View and Compare View:
-  clicking a permission column header highlights all rows where the relevant user(s) hold a
-  committed permission of that type, dimming all other rows; clicking an object row header in
-  Compare View highlights all user columns that have any committed permission on that object;
-  clicking the active header clears the highlight; only one highlight may be active at a time;
-  the highlight is visual only and does not affect staging, filtering, or the underlying data.
+- **FR-003**: The system MUST support cross-query highlighting in the User View, Compare View,
+  and Object View: clicking a permission column header highlights all rows where the relevant
+  user(s) hold a committed permission of that type, dimming all other rows; clicking an object
+  row header in Compare View or a user row header in Object View highlights all columns that
+  have any committed permission on/by that entity; clicking the active header clears the
+  highlight; only one highlight may be active at a time; the highlight is visual only and
+  does not affect staging, filtering, or the underlying data.
 - *(FR-004 and FR-005 are unassigned — these numbers were skipped during authoring and do not represent removed or pending requirements.)*
 - **FR-006**: The system MUST allow the administrator to assign one or more alphanumeric tags
   (no spaces, no special characters) to any database user.
@@ -323,6 +337,14 @@ relaunching the app, and confirming it reconnects without requesting credentials
 - **FR-017**: The system MUST validate all user inputs (tags, connection parameters, search
   terms) before processing; invalid inputs MUST be rejected with a specific, actionable error
   message identifying the problem.
+- **FR-017a**: The system MUST validate permission changes at staging time against the
+  administrator's own privilege level; if an administrator attempts to stage a GRANT for a
+  permission they themselves do not possess (privilege escalation attempt), display warning
+  dialog: "You cannot grant SELECT on dbo.Orders because you do not have this permission
+  yourself. Contact a database owner or sysadmin. [OK]"; the change is not staged; privilege
+  validation runs on first cell toggle in each session and caches results for performance;
+  validation failures are logged but do not appear in audit log since the change was never
+  applied.
 - **FR-018**: The system MUST revert any toggle to its previous state and display an actionable
   error message if a permission change fails at the database level.
 - **FR-019**: The system MUST provide a manual refresh control that re-fetches all permission
@@ -331,11 +353,66 @@ relaunching the app, and confirming it reconnects without requesting credentials
   scannability and recognition.
 - **FR-021**: All interactive controls (matrix toggles, buttons, search fields, filters, sort
   controls, configuration fields) MUST be fully operable using only a keyboard.
-- **FR-022**: The system MUST detect database connection loss and display a reconnection prompt
-  without crashing or corrupting the current session state.
+- **FR-022**: The system MUST detect database connection loss within 5 seconds (SC-008) via
+  lazy detection (exception handling on the next database operation) combined with a 30-second
+  background heartbeat as fallback for idle sessions, and display a reconnection prompt without
+  crashing or corrupting the current session state; all staged changes MUST be preserved in
+  memory during disconnection.
 - **FR-023**: The system MUST allow the administrator to add, edit, and remove a free-text
   description for any database object; descriptions MUST be persisted in the database itself
   (not locally) so they are visible to any administrator connecting to the same server.
+- **FR-024**: The system MUST provide non-color indicators for all permission states (GRANT,
+  DENY, none, and staged variations) using both color AND shape/symbol (checkmarks, X marks,
+  dashes, asterisks) to ensure color-blind users can distinguish states; all colors MUST meet
+  WCAG AA contrast requirements (4.5:1 for normal text, 3:1 for large text and UI components);
+  all icons and emoji MUST have accessible text alternatives announced to screen readers.
+- **FR-025**: The system MUST implement comprehensive accessibility features meeting WCAG 2.2
+  Level AA standards, including: visible focus indicators (minimum 3:1 contrast) on all
+  interactive elements; screen reader announcements via live regions for dynamic content
+  updates (staged change count, search results, connection status, errors); programmatic
+  error message association with form fields (aria-describedby or equivalent); support for
+  Windows High Contrast mode; support for reduced motion preferences; text scaling up to 200%;
+  semantic heading structure (H1-H3) for screen reader navigation; keyboard shortcuts for skip
+  navigation; and accessible names for all buttons, dropdowns, and interactive controls that
+  describe their purpose and state.
+- **FR-026**: The system MUST display a commit preview dialog when the administrator initiates
+  a commit action, showing a summary of all staged changes (up to 3 changes by default with
+  option to expand full list) with each change listing the permission action (GRANT/DENY/REVOKE),
+  affected user, target object, and previous state; the dialog MUST provide options to review
+  changes in the matrix, proceed with commit, or cancel without committing; upon successful
+  commit, the system MUST display a confirmation summary with option to view the audit log.
+- **FR-027**: The system MUST provide visual preview feedback when the administrator presses
+  (but has not yet released) the mouse button on a permission cell, showing a tooltip that
+  indicates the next state in the cycle (e.g., "Click to change to GRANT", "Click to cycle to
+  DENY", "Click to clear permission") with a brief delay (100ms) to prevent flicker on quick
+  clicks; releasing the mouse button applies the change while releasing outside the cell or
+  pressing Escape cancels the action without staging changes.
+- **FR-028**: The system MUST provide pagination controls in the Compare View (all users mode)
+  to limit the number of user columns displayed simultaneously, defaulting to 10 users per page
+  with options to show 5, 10, 20 users per page or all users; the system MUST support user
+  pinning functionality allowing administrators to mark frequently accessed users to appear
+  first in the list across sessions, and MUST display pagination state (e.g., "Showing users
+  1-10 of 47") in the orientation banner.
+- **FR-029**: The system MUST provide undo and redo functionality for cell state changes,
+  allowing administrators to reverse up to 50 previous cell toggles via keyboard shortcuts
+  (`Ctrl+Z` for undo, `Ctrl+Y` or `Ctrl+Shift+Z` for redo); each undo/redo action MUST
+  announce the change via screen reader (e.g., "Undone: Changed dbo.Orders SELECT for jsmith
+  from GRANT to none") and update the staged change counter; undo/redo stack is cleared on
+  commit or cancel; undo/redo does not affect committed changes, only staged modifications.
+- **FR-030**: The system MUST prevent mass permission changes from being applied without
+  explicit confirmation; when ≥5 cells would be affected by a single action (e.g., setting
+  all selected cells to GRANT via right-click menu, or applying a change to an entire column),
+  display confirmation dialog: "Apply GRANT SELECT to 247 objects for jsmith? This will stage
+  247 changes. [Apply] [Cancel]"; confirmation threshold is 5 cells to balance safety with
+  efficiency and maintain consistency with other confirmation thresholds (Cancel button,
+  Commit preview); confirmation includes exact cell count and preview of affected scope.
+- **FR-031**: The system MUST support cell range selection via mouse (click-drag to select
+  contiguous range, or Ctrl+click for multi-select of individual cells) and keyboard
+  (Shift+Arrow keys to extend selection); selected cells can be modified in bulk via
+  right-click context menu → "Set all selected to GRANT/DENY/none"; bulk changes require
+  confirmation dialog when ≥5 cells selected (FR-030); visual feedback shows selected cells
+  with blue outline (#0078D4, 2px); selection is cleared on commit, cancel, view switch, or
+  Escape key; maximum selection size is 1000 cells to prevent performance issues.
 
 ### Key Entities
 
