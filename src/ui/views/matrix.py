@@ -361,6 +361,10 @@ class MatrixView(ttk.Frame):
         self._apply_filters()
         self._update_changes_count()
 
+    def refresh(self) -> None:
+        """Alias for refresh_data() for API consistency."""
+        self.refresh_data()
+
     def _show_placeholder(self, show: bool) -> None:
         """Show or hide the placeholder text."""
         if show:
