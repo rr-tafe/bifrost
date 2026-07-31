@@ -28,6 +28,7 @@ from tkinter import messagebox, ttk
 from src.models.config import Configuration
 from src.services.config import load_config
 from src.services.tags import TagStore
+from src.ui.views.audit import AuditView
 from src.ui.views.matrix import MatrixView
 from src.ui.views.settings import SettingsView
 from src.ui.views.tags import TagsView
@@ -496,18 +497,16 @@ class BifrostApp(tk.Tk):
             view.refresh()
             return view
 
-        # Placeholder frames for views not yet implemented
-        frame = ttk.Frame(self._view_container)
-
         if view_type == ViewType.AUDIT:
-            label = ttk.Label(
-                frame,
-                text="Audit Log View\n\n(Under Construction)",
-                font=("Segoe UI", 16),
-                justify="center",
+            view = AuditView(
+                self._view_container,
+                on_fetch=None,  # Will be set when connected
+                on_export=None,
             )
-            label.pack(expand=True)
+            return view
 
+        # Placeholder for any future views
+        frame = ttk.Frame(self._view_container)
         return frame
 
     def _on_settings_saved(self, config: Configuration) -> None:
