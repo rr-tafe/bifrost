@@ -46,15 +46,16 @@ Usage:
         conn.close()
 """
 
+
 import pyodbc
-from typing import Optional
+
 from src.models.config import Configuration
 
 
 class DatabaseConnectionError(Exception):
     """Raised when database connection fails."""
 
-    def __init__(self, message: str, original_error: Optional[Exception] = None):
+    def __init__(self, message: str, original_error: Exception | None = None):
         """
         Initialize database connection error.
 
@@ -151,36 +152,45 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
         raise DatabaseConnectionError(friendly_message, original_error=e)
 
 
-def test_connection(config: Configuration) -> Optional[str]:
+def test_connection(config: Configuration) -> tuple[bool, str]:
     """
-    Test database connection and return error message if it fails.
+    Test database connection and return result.
 
     Args:
         config: Configuration to test
 
     Returns:
-        Optional[str]: Error message if connection fails, None if successful
+        tuple[bool, str]: (success, message) - success flag and status message
 
     This is a non-raising version of create_connection() for use in the Settings UI
     where we want to show validation feedback without exception handling.
 
     Example:
         >>> config = Configuration(server="invalid", database="test")
-        >>> error = test_connection(config)
-        >>> if error:
-        ...     print(f"Connection failed: {error}")
+        >>> success, message = test_connection(config)
+        >>> if not success:
+        ...     print(f"Connection failed: {message}")
         Connection failed: Server 'invalid' not found...
     """
     try:
         conn = create_connection(config)
+
+        # Get server info for success message
+        cursor = conn.cursor()
+        cursor.execute("SELECT @@SERVERNAME, DB_NAME()")
+        row = cursor.fetchone()
+        server_name = row[0] if row else config.server
+        db_name = row[1] if row else config.database
+        cursor.close()
+
         conn.close()
-        return None
+        return True, f"Connected to {server_name}/{db_name}"
 
     except (DatabaseConnectionError, ValueError) as e:
-        return str(e)
+        return False, str(e)
 
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        return False, f"Unexpected error: {str(e)}"
 
 
 def get_current_user(conn: pyodbc.Connection) -> str:
