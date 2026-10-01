@@ -46,10 +46,20 @@ def test_no_duplicate_shortcuts_and_names(qtbot):
             assert text not in seen, f"{text} used by {seen.get(text)} and {key}"
             seen[text] = key
     rows = registry.shortcut_rows()
-    assert ("Edit", "Discard all changes", registry["discard"].shortcuts()[0].toString(
-        registry["discard"].shortcuts()[0].SequenceFormat.NativeText)) in rows
+    assert any(menu == "Edit" and command == "Undo" and keys != "—" for menu, command, keys in rows)
     assert "dev_stage_sample" in registry.menus["Help"]
     assert "dev_stage_sample" not in ActionRegistry(host, include_dev=False).actions
+
+
+def test_discard_has_no_menu_item_or_shortcut(qtbot):
+    """Only the status bar Discard button can discard staged changes (user decision 2026-10-01)."""
+    from PySide6.QtWidgets import QWidget
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    registry = ActionRegistry(host, include_dev=True)
+    assert "discard" not in registry.actions
+    assert all("Discard" not in command for _menu, command, _keys in registry.shortcut_rows())
 
 
 def test_escape_does_not_discard(qtbot):
@@ -64,11 +74,11 @@ def test_escape_does_not_discard(qtbot):
 def test_enabled_states_when_ready(window, session):
     r = window.registry
     assert r["refresh"].isEnabled()
-    assert not r["commit"].isEnabled() and not r["discard"].isEnabled() and not r["undo"].isEnabled()
+    assert not r["commit"].isEnabled() and not window.status.discard_button.isEnabled() and not r["undo"].isEnabled()
     assert r["export_permissions"].isEnabled()
     assert not r["jump"].isEnabled()
     stage(session, 2)
-    assert r["commit"].isEnabled() and r["discard"].isEnabled() and r["undo"].isEnabled()
+    assert r["commit"].isEnabled() and window.status.discard_button.isEnabled() and r["undo"].isEnabled()
     assert window.status.commit_button.text() == "Commit 2"
     assert window.status.pending_pill.text() == "2 pending"
     assert window.isWindowModified()
@@ -80,7 +90,7 @@ def test_enabled_states_offline(window, session):
     session.disconnect()
     r = window.registry
     assert not r["refresh"].isEnabled() and not r["commit"].isEnabled()
-    assert r["discard"].isEnabled()  # can still throw changes away offline
+    assert window.status.discard_button.isEnabled()  # can still throw changes away offline
     assert window.status.reconnect_button.isVisibleTo(window)
     assert window.status.connection_pill.kind == "offline"
 
@@ -171,10 +181,10 @@ def test_partial_failure_discard_reverts_only_failed(qtbot, window, session, env
 def test_discard_confirmation(qtbot, window, session, monkeypatch):
     stage(session, 6)
     monkeypatch.setattr(messages, "confirm_discard", lambda parent, count: False)
-    window.registry["discard"].trigger()
+    window.status.discard_button.click()
     assert session.staged_count == 6
     monkeypatch.setattr(messages, "confirm_discard", lambda parent, count: True)
-    window.registry["discard"].trigger()
+    window.status.discard_button.click()
     assert session.staged_count == 0
 
 

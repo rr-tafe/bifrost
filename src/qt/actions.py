@@ -30,7 +30,9 @@ class ActionSpec:
 # Menu order and contents. "-" entries are separators.
 MENUS: dict[str, list[str]] = {
     "File": ["settings", "disconnect", "-", "export_permissions", "export_audit", "-", "exit"],
-    "Edit": ["undo", "redo", "-", "commit", "discard", "-", "toggle_pending"],
+    # Discard has no menu item or shortcut on purpose: only the status bar Discard button
+    # can throw away staged changes, so a stray keypress never can.
+    "Edit": ["undo", "redo", "-", "commit", "-", "toggle_pending"],
     "View": ["view_matrix", "view_audit", "-", "refresh", "jump", "-", "tags"],
     "Help": ["shortcuts", "about"],
 }
@@ -44,7 +46,6 @@ SPECS: list[ActionSpec] = [
     ActionSpec("undo", "&Undo", "Edit", ("Ctrl+Z",), "Undo the last change"),
     ActionSpec("redo", "&Redo", "Edit", ("Ctrl+Y", "Ctrl+Shift+Z"), "Redo the last undone change"),
     ActionSpec("commit", "&Commit changes…", "Edit", ("Ctrl+S", "Ctrl+Return"), "Apply staged changes to the database"),
-    ActionSpec("discard", "&Discard all changes…", "Edit", ("Ctrl+Shift+Del",), "Throw away every staged change"),
     ActionSpec("toggle_pending", "Show &pending changes", "Edit", ("Ctrl+Shift+P",), "Show or hide the pending changes list"),
     ActionSpec("view_matrix", "&Matrix", "View", ("Ctrl+1",), "Show the permission matrix"),
     ActionSpec("view_audit", "&Audit log", "View", ("Ctrl+3",), "Show the audit log"),

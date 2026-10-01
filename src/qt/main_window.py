@@ -181,7 +181,6 @@ class MainWindow(QMainWindow):
         r["undo"].triggered.connect(s.undo)
         r["redo"].triggered.connect(s.redo)
         r["commit"].triggered.connect(lambda: s.request_commit())
-        r["discard"].triggered.connect(lambda: s.discard_all())
         r["toggle_pending"].setCheckable(True)
         r["toggle_pending"].toggled.connect(self._set_tray_visible)
         r["view_matrix"].triggered.connect(lambda: self.tabs.setCurrentIndex(TAB_MATRIX))
@@ -235,7 +234,6 @@ class MainWindow(QMainWindow):
 
         r["refresh"].setEnabled(s.connected and not s.busy)
         r["commit"].setEnabled(s.can_commit)
-        r["discard"].setEnabled(staged > 0 and not committing)
         r["undo"].setEnabled(s.can_undo)
         r["redo"].setEnabled(s.can_redo)
         r["export_permissions"].setEnabled(s.matrix is not None)

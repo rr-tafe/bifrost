@@ -560,7 +560,7 @@ status bar and the shortcuts dialog. A test asserts no two actions share a key s
 | Edit | Undo | Ctrl+Z | |
 | Edit | Redo | Ctrl+Y, Ctrl+Shift+Z | |
 | Edit | Commit changes… | Ctrl+S, Ctrl+Enter | |
-| Edit | Discard all changes… | Ctrl+Shift+Delete | **Changed**: no longer Escape (see below) |
+| — | Discard all changes | none | **Changed**: no shortcut and no menu item; only the status bar Discard button (see below) |
 | Edit | Show pending changes | Ctrl+Shift+P | toggles the tray |
 | View | Matrix | Ctrl+1 | |
 | View | Grants | Ctrl+2 | added in step 4 |
@@ -571,11 +571,11 @@ status bar and the shortcuts dialog. A test asserts no two actions share a key s
 | Help | Keyboard shortcuts | F1 | |
 | Help | About Bifrost | — | |
 
-**Escape** no longer discards staged changes. In the Tk app a stray Escape (for example to
-close a dropdown) could throw away work; at hundreds of staged changes that's too costly.
-Escape now only closes popups/dialogs and (step 3) clears the selection. This is open question
-3 in [plan.md](plan.md); if the user wants Escape back, it goes in this table with the ≥ 5
-confirmation.
+**Discarding** (decided 2026-10-01): only the status bar **Discard** button discards staged
+changes. There is no keyboard shortcut and no menu item, so no keypress (Escape included) can
+throw away staged work. The button is still reachable by Tab for keyboard users, and 5 or more
+changes still ask for confirmation. Escape only closes popups and dialogs and (step 3) clears
+the selection.
 
 ## 13. Theme (`src/qt/theme.py`)
 
@@ -854,8 +854,8 @@ Completed 2026-10-01 on branch `002-step2-app-shell`.
 - Ruff ignores `N802`/`N815` under `src/qt/` because Qt overrides and signals use camelCase.
 - The light-theme GRANT colour changed from `#1f7a4a` to `#1a6e42` (the first was 4.45:1 on its
   background, just under 4.5:1); staged text `#8a5700` instead of `#a86a00` for the same reason.
-- Escape no longer discards (Ctrl+Shift+Delete does), as proposed; still open question 3 in
-  the plan until you confirm.
+- Discard has no shortcut or menu item; only the status bar Discard button discards
+  (decided 2026-10-01, open question 3 closed).
 
 ### Not verified here (needs a real desktop or the work machine)
 

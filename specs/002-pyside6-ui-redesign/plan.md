@@ -137,6 +137,5 @@ Spec: [spec-02-app-shell.md](spec-02-app-shell.md)
    PyPI (no installer or MSI). `PySide6-Essentials` 6.11.2 (`cp310-abi3-win_amd64`) installed
    and ran a test window on the work machine with Python 3.14. It bundles the Qt and Visual C++
    runtime DLLs; about 78 MB download, 210 MB installed.
-3. **Escape key.** The old spec bound Escape to "discard all staged changes". Step 2 proposes
-   moving discard to Ctrl+Shift+Delete, so Escape only clears selection and closes popups.
-   Confirm.
+3. **Escape key and discarding.** Resolved 2026-10-01: only the status bar Discard button
+   discards staged changes. No keyboard shortcut, no menu item; Escape never discards.
