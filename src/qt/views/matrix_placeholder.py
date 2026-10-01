@@ -1,8 +1,10 @@
 """
-Matrix tab content until the split view arrives in step 3.
+Matrix tab status pages, shown until data is loaded.
 
 Shows what the session is doing: needs settings, connecting, loading (with each
-stage and a Cancel button), failed (with Retry), or a summary of what was loaded.
+stage and a Cancel button) or failed (with Retry). Once data is loaded the
+MatrixView shows the split view instead. summary_rows() feeds Help → Database
+summary.
 """
 
 from __future__ import annotations
@@ -11,8 +13,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from src.qt.session import SessionState
 
 if TYPE_CHECKING:
-    from src.qt.session import LoadSummary, Session
+    from src.qt.session import Session
     from src.services.loader import LoadProgress
 
 STAGES = (
@@ -37,6 +37,7 @@ STAGES = (
 PRINCIPAL_TYPES = {"U": "Windows users", "G": "Windows groups", "S": "SQL users"}
 OBJECT_TYPES = {"TABLE": "tables", "VIEW": "views", "PROCEDURE": "procedures", "FUNCTION": "functions"}
 SUMMARY_ROWS = (
+    "Database",
     "Principals",
     "Objects",
     "Explicit permissions",
@@ -148,42 +149,11 @@ class MatrixPlaceholder(QWidget):
         failed_settings.clicked.connect(self.openSettings)
         self.failed_page.add_buttons(retry_button, failed_settings)
 
-        # Summary
-        self.summary_page = _Page(self)
-        self.summary_heading = _heading("", self.summary_page)
-        self.summary_page.column.addWidget(self.summary_heading)
-        self.summary_grid = QGridLayout()
-        self.summary_grid.setHorizontalSpacing(24)
-        self.summary_grid.setVerticalSpacing(4)
-        self.summary_values: dict[str, QLabel] = {}
-        for row, name in enumerate(SUMMARY_ROWS):
-            name_label = QLabel(name, self.summary_page)
-            name_label.setStyleSheet("font-weight: 600;")
-            value_label = _body("", self.summary_page)
-            name_label.setBuddy(value_label)
-            self.summary_grid.addWidget(name_label, row, 0, Qt.AlignmentFlag.AlignTop)
-            self.summary_grid.addWidget(value_label, row, 1)
-            self.summary_values[name] = value_label
-        self.summary_grid.setColumnStretch(1, 1)
-        self.summary_page.column.addLayout(self.summary_grid)
-        line = QFrame(self.summary_page)
-        line.setFrameShape(QFrame.Shape.HLine)
-        self.summary_page.column.addWidget(line)
-        self.summary_page.column.addWidget(
-            _body(
-                "The new matrix view arrives in the next update. Until then, edit permissions in the "
-                "previous version with: python main.py --legacy-tk",
-                self.summary_page,
-            )
-        )
-
-        for page in (self.setup_page, self.loading_page, self.failed_page, self.summary_page):
+        for page in (self.setup_page, self.loading_page, self.failed_page):
             self.stack.addWidget(page)
 
         session.stateChanged.connect(lambda _state: self.update_view())
         session.loadProgress.connect(self._on_progress)
-        session.dataLoaded.connect(lambda _summary: self.update_view())
-        session.stagedCountChanged.connect(lambda _count: self.update_view())
         self.update_view()
 
     def update_view(self) -> None:
@@ -196,8 +166,6 @@ class MatrixPlaceholder(QWidget):
         elif state is SessionState.FAILED and self.session.last_load is None:
             self.error_label.setText(self.session.last_error or "Something went wrong.")
             self.stack.setCurrentWidget(self.failed_page)
-        elif self.session.last_load is not None:
-            self._show_summary(self.session.last_load)
         else:
             self._show_loading(state)
 
@@ -230,24 +198,26 @@ class MatrixPlaceholder(QWidget):
         self.loading_bar.setRange(0, progress.stage_count)
         self.loading_bar.setValue(progress.stage_number - 1)
 
-    def _show_summary(self, summary: LoadSummary) -> None:
-        config = self.session.config
-        target = f"{config.server}/{config.database}" if config else ""
-        self.summary_heading.setText(f"{target} is loaded")
-        principals = ", ".join(
-            f"{summary.principals_by_type[k]:,} {PRINCIPAL_TYPES.get(k, k)}" for k in sorted(summary.principals_by_type)
-        )
-        objects = ", ".join(f"{n:,} {OBJECT_TYPES.get(t, t)}" for t, n in sorted(summary.objects_by_type.items()))
-        timings = ", ".join(f"{name} {seconds * 1000:,.0f} ms" for name, seconds in summary.timings.items())
-        values = {
-            "Principals": f"{summary.principals:,}  ({principals})",
-            "Objects": f"{summary.objects:,}  ({objects})",
-            "Explicit permissions": f"{summary.grants:,} grants, {summary.denies:,} denies",
-            "Staged changes": f"{self.session.staged_count:,}",
-            "Signed in as": self.session.current_user or "—",
-            "Load time": timings or "—",
-            "Loaded at": summary.loaded_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        for name, value in values.items():
-            self.summary_values[name].setText(value)
-        self.stack.setCurrentWidget(self.summary_page)
+
+def summary_rows(session: Session) -> list[tuple[str, str]]:
+    """(name, value) rows describing the loaded data, for Help → Database summary."""
+    summary = session.last_load
+    if summary is None:
+        return [("Status", "No data loaded")]
+    config = session.config
+    principals = ", ".join(
+        f"{summary.principals_by_type[k]:,} {PRINCIPAL_TYPES.get(k, k)}" for k in sorted(summary.principals_by_type)
+    )
+    objects = ", ".join(f"{n:,} {OBJECT_TYPES.get(t, t)}" for t, n in sorted(summary.objects_by_type.items()))
+    timings = ", ".join(f"{name} {seconds * 1000:,.0f} ms" for name, seconds in summary.timings.items())
+    values = {
+        "Database": f"{config.server}/{config.database}" if config else "—",
+        "Principals": f"{summary.principals:,}  ({principals})",
+        "Objects": f"{summary.objects:,}  ({objects})",
+        "Explicit permissions": f"{summary.grants:,} grants, {summary.denies:,} denies",
+        "Staged changes": f"{session.staged_count:,}",
+        "Signed in as": session.current_user or "—",
+        "Load time": timings or "—",
+        "Loaded at": summary.loaded_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return [(name, values[name]) for name in SUMMARY_ROWS]

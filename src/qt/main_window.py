@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -41,7 +40,8 @@ from src.qt.dialogs.tag_manager import TagManagerDialog
 from src.qt.session import Session, SessionState, describe_change
 from src.qt.theme import tokens
 from src.qt.views.audit_view import AuditView
-from src.qt.views.matrix_placeholder import MatrixPlaceholder
+from src.qt.views.matrix.matrix_view import MatrixView
+from src.qt.views.matrix_placeholder import summary_rows
 from src.qt.widgets.pending_tray import PendingTray
 from src.qt.widgets.status_bar import BifrostStatusBar
 from src.services.export import get_suggested_filename
@@ -93,13 +93,12 @@ class MainWindow(QMainWindow):
         session: Session,
         settings: QSettings | None = None,
         log_path: str = "",
-        include_dev: bool | None = None,
     ) -> None:
         super().__init__()
         self.session = session
         self.settings = settings or QSettings()
         self.log_path = log_path
-        self.registry = ActionRegistry(self, include_dev=include_dev)
+        self.registry = ActionRegistry(self)
         self._quitting = False
         self._quit_after_commit = False
         self._connection_dialog_open = False
@@ -113,7 +112,7 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._build_toolbar()
-        self.matrix_view = MatrixPlaceholder(session, self)
+        self.matrix_view = MatrixView(session, self.settings, self)
         self.audit_view = AuditView(session, self)
         self.stack = QStackedWidget(self)
         self.stack.addWidget(self.matrix_view)
@@ -132,6 +131,8 @@ class MainWindow(QMainWindow):
         self._wire_status_bar()
         self._wire_session()
         self.matrix_view.openSettings.connect(lambda: self.open_settings())
+        self.matrix_view.tagsRequested.connect(self.open_tags)
+        self.matrix_view.extra_focus_targets = [self.tray.table]
 
         QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _scheme: self.apply_theme())
         self._restore_window_state()
@@ -186,12 +187,13 @@ class MainWindow(QMainWindow):
         r["view_matrix"].triggered.connect(lambda: self.tabs.setCurrentIndex(TAB_MATRIX))
         r["view_audit"].triggered.connect(lambda: self.tabs.setCurrentIndex(TAB_AUDIT))
         r["refresh"].triggered.connect(s.refresh)
-        r["jump"].setEnabled(False)
+        r["jump"].triggered.connect(self._open_jump)
+        r["mode_principal"].triggered.connect(lambda: self._set_mode("principal"))
+        r["mode_object"].triggered.connect(lambda: self._set_mode("object"))
+        r["db_summary"].triggered.connect(self.show_database_summary)
         r["tags"].triggered.connect(self.open_tags)
         r["shortcuts"].triggered.connect(lambda: messages.ShortcutsDialog(self.registry, self).exec())
         r["about"].triggered.connect(self.show_about)
-        if "dev_stage_sample" in r.actions:
-            r["dev_stage_sample"].triggered.connect(self.dev_stage_sample)
 
     def _wire_status_bar(self) -> None:
         st = self.status
@@ -239,8 +241,9 @@ class MainWindow(QMainWindow):
         r["export_permissions"].setEnabled(s.matrix is not None)
         r["export_audit"].setEnabled(s.connected)
         r["disconnect"].setEnabled(s.connected)
-        if "dev_stage_sample" in r.actions:
-            r["dev_stage_sample"].setEnabled(s.can_edit)
+        has_data = s.matrix is not None and s.last_load is not None
+        for key in ("jump", "mode_principal", "mode_object"):
+            r[key].setEnabled(has_data)
 
         st = self.status
         st.set_staged_count(staged)
@@ -269,6 +272,7 @@ class MainWindow(QMainWindow):
 
     def apply_theme(self) -> None:
         self.status.apply_theme(tokens())
+        self.matrix_view.apply_theme()
 
     def announce(self, text: str) -> None:
         """Send text to screen readers (live region equivalent)."""
@@ -302,8 +306,15 @@ class MainWindow(QMainWindow):
             action.blockSignals(False)
 
     def _on_reveal(self, _cell) -> None:
+        self.tabs.setCurrentIndex(TAB_MATRIX)  # MatrixView handles revealRequested itself
+
+    def _open_jump(self) -> None:
         self.tabs.setCurrentIndex(TAB_MATRIX)
-        self.status.show_status("Jumping to a cell arrives with the new matrix view.", 5000)
+        self.matrix_view.open_jump()
+
+    def _set_mode(self, mode: str) -> None:
+        self.tabs.setCurrentIndex(TAB_MATRIX)
+        self.matrix_view.set_mode(mode)
 
     # --- Dialogs -----------------------------------------------------------------------
 
@@ -324,6 +335,11 @@ class MainWindow(QMainWindow):
         self.tag_manager.show()
         self.tag_manager.raise_()
         self.tag_manager.activateWindow()
+
+    def show_database_summary(self) -> None:
+        rows = summary_rows(self.session)
+        text = "\n".join(f"{name}: {value}" for name, value in rows)
+        messages.show_info(self, "Database summary", text)
 
     def show_about(self) -> None:
         drivers = ", ".join(d for d in pyodbc.drivers() if "SQL Server" in d) or "none found"
@@ -464,14 +480,6 @@ class MainWindow(QMainWindow):
         else:
             self.status.show_status("Search the audit log first, then export what it shows.", 8000)
 
-    # --- Dev ------------------------------------------------------------------------------
-
-    def dev_stage_sample(self) -> None:
-        count, ok = QInputDialog.getInt(self, "Dev: stage sample changes", "How many changes?", 12, 1, 20_000)
-        if ok:
-            changed = self.session.dev_stage_sample(count)
-            self.status.show_status(f"Dev: staged {changed:,} sample changes", 5000)
-
     # --- Window state and quit -------------------------------------------------------------
 
     def _restore_window_state(self) -> None:
@@ -495,6 +503,7 @@ class MainWindow(QMainWindow):
         self._sync_tray_action(not self.tray.isHidden())  # the window isn't shown yet
 
     def save_window_state(self) -> None:
+        self.matrix_view.save_state()
         self.settings.setValue("window/geometry", self.saveGeometry())
         self.settings.setValue("window/state", self.saveState())
         self.settings.setValue("window/tab", self.tabs.currentIndex())

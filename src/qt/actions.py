@@ -8,7 +8,6 @@ enabled state and one accessible name everywhere.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject
@@ -33,8 +32,8 @@ MENUS: dict[str, list[str]] = {
     # Discard has no menu item or shortcut on purpose: only the status bar Discard button
     # can throw away staged changes, so a stray keypress never can.
     "Edit": ["undo", "redo", "-", "commit", "-", "toggle_pending"],
-    "View": ["view_matrix", "view_audit", "-", "refresh", "jump", "-", "tags"],
-    "Help": ["shortcuts", "about"],
+    "View": ["view_matrix", "view_audit", "-", "mode_principal", "mode_object", "-", "refresh", "jump", "-", "tags"],
+    "Help": ["shortcuts", "db_summary", "about"],
 }
 
 SPECS: list[ActionSpec] = [
@@ -50,21 +49,14 @@ SPECS: list[ActionSpec] = [
     ActionSpec("view_matrix", "&Matrix", "View", ("Ctrl+1",), "Show the permission matrix"),
     ActionSpec("view_audit", "&Audit log", "View", ("Ctrl+3",), "Show the audit log"),
     ActionSpec("refresh", "&Refresh", "View", ("F5",), "Reload permissions from the database"),
-    ActionSpec("jump", "&Jump to…", "View", ("Ctrl+K",), "Jump to a principal, object or tag (coming with the matrix view)"),
+    ActionSpec("mode_principal", "By &principal", "View", ("Ctrl+Shift+1",), "Show one principal's permissions on every object"),
+    ActionSpec("mode_object", "By &object", "View", ("Ctrl+Shift+2",), "Show every principal's permissions on one object"),
+    ActionSpec("jump", "&Jump to…", "View", ("Ctrl+K",), "Jump to a principal, object or tag"),
     ActionSpec("tags", "&Tags…", "View", ("Ctrl+T",), "Manage tags on principals and objects"),
     ActionSpec("shortcuts", "&Keyboard shortcuts", "Help", ("F1",), "List every keyboard shortcut"),
+    ActionSpec("db_summary", "&Database summary", "Help", (), "What was loaded from the database"),
     ActionSpec("about", "&About Bifrost", "Help", (), "Version and diagnostics"),
 ]
-
-DEV_SPECS: list[ActionSpec] = [
-    ActionSpec("dev_stage_sample", "Dev: stage sample changes…", "Help", (), "Stage random changes for testing"),
-]
-
-
-def dev_mode() -> bool:
-    """True when BIFROST_DEV=1 (enables dev-only actions)."""
-    return os.environ.get("BIFROST_DEV") == "1"
-
 
 class ActionRegistry(QObject):
     """
@@ -76,16 +68,12 @@ class ActionRegistry(QObject):
         menus: menu name -> action keys in order ("-" = separator)
     """
 
-    def __init__(self, parent: QObject, include_dev: bool | None = None) -> None:
+    def __init__(self, parent: QObject) -> None:
         super().__init__(parent)
         self.actions: dict[str, QAction] = {}
         self.specs: dict[str, ActionSpec] = {}
         self.menus: dict[str, list[str]] = {menu: list(keys) for menu, keys in MENUS.items()}
-        specs = list(SPECS)
-        if include_dev if include_dev is not None else dev_mode():
-            specs += DEV_SPECS
-            self.menus["Help"] += ["-", *(spec.key for spec in DEV_SPECS)]
-        for spec in specs:
+        for spec in SPECS:
             action = QAction(spec.text, parent)
             if spec.standard is not None:
                 action.setShortcuts(QKeySequence.keyBindings(spec.standard))

@@ -428,6 +428,10 @@ class PermissionIndex:
         """Return effective grant/deny counts and pending cells for a principal."""
         return RowCounts(self._p_grants[p], self._p_denies[p], self._p_pending[p])
 
+    def object_pending(self, o: int) -> int:
+        """Return the number of staged cells on object o (no allocation; for filters)."""
+        return self._o_pending[o]
+
     def object_counts(self, o: int) -> RowCounts:
         """Return effective grant/deny counts and pending cells for an object."""
         return RowCounts(self._o_grants[o], self._o_denies[o], self._o_pending[o])

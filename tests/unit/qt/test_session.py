@@ -263,10 +263,6 @@ class TestEditing:
         session.undo()
         assert session.staged_count == 2
 
-    def test_dev_stage_sample(self, session):
-        assert session.dev_stage_sample(4, seed=1) > 0
-        assert session.matrix.can_undo()
-
 
 class TestConnectionHealth:
     def test_heartbeat_skipped_while_busy(self, qtbot, session, monkeypatch):

@@ -1,6 +1,6 @@
 # Spec — Step 3: Split View (Main Matrix Screen)
 
-**Plan**: [plan.md](plan.md) | **Created**: 2026-10-01 | **Status**: Ready to implement (decisions in section 19)
+**Plan**: [plan.md](plan.md) | **Created**: 2026-10-01 | **Status**: Done (2026-10-02); manual checks outstanding (section 18)
 **Depends on**: [step 1](spec-01-data-layer.md), [step 2](spec-02-app-shell.md) | **Blocks**: steps 4–6
 **Mockups**: https://claude.ai/artifact/9oe2fFwTwa5kzJ9AeGzZyL (option A)
 
@@ -575,20 +575,88 @@ mapping.
 
 ## 17. Acceptance criteria
 
-- [ ] `MatrixView` replaces the placeholder in READY / COMMITTING / OFFLINE states.
-- [ ] Sections 6–10 implemented as decided in section 19.
-- [ ] Budgets in section 14 met on the dev Mac; numbers recorded in Results.
-- [ ] All tests pass headless; `ruff check` clean for new code; new modules ≥ 80% covered
+- [x] `MatrixView` replaces the placeholder once data is loaded (READY / COMMITTING / OFFLINE, and
+      also during a refresh; see deviation 1).
+- [x] Sections 6–10 implemented as decided in section 19 (deviations listed in section 18).
+- [x] Budgets in section 14 met on the dev Mac; numbers recorded in Results.
+- [x] All tests pass headless; `ruff check` clean for new code; new modules ≥ 80% covered
       (models, bulk, view state) and the view/grid modules covered by qtbot tests.
 - [ ] Manual script (section 16) done on the Mac; steps 12–14 also on the work machine.
-- [ ] `save_object_description` fixed for views, procedures and functions.
-- [ ] Dev "stage sample changes" action removed; README updated (it's no longer needed).
-- [ ] Plan status updated; step 2 follow-up about index build on the UI thread resolved or
-      re-deferred with measurements.
+      Steps 2, 4, 8 and 9 were run as a script against BifrostDev (Results); the rest need a person.
+- [x] `save_object_description` fixed for views, procedures and functions.
+- [x] Dev "stage sample changes" action removed; README updated (it's no longer needed).
+- [x] Plan status updated; step 2 follow-up about index build on the UI thread resolved (index
+      now builds on the DB worker).
 
 ## 18. Results
 
-_Fill in when step 3 is done._
+Implemented 2026-10-02 on branch `002-step3-split-view`.
+
+### Performance (dev Mac, offscreen, best of 3; `tests/perf/test_matrix_view_perf.py`)
+
+Reference dataset 1,000 × 20,000 × 200,000, view created before the data arrives (as in the app).
+
+| Operation | Budget | Measured |
+|---|---|---|
+| Apply snapshot + build the visible pane (UI thread) | 100 ms | 31 ms |
+| Select a principal, All objects (20,000 rows) + paint | 80 ms | 5 ms |
+| Select busiest principal, Only with access (2,423 rows) | 30 ms | 4 ms |
+| Grid filter keystroke | 50 ms | 8 ms |
+| Left list search keystroke | 20 ms | 3 ms |
+| Paint one screen | 16 ms | 3 ms |
+| Stage 1,000 cells + repaint | 100 ms | 5 ms |
+| Mode switch carrying the focused cell | 80 ms | 15 ms (first switch, which builds the other pane: ~55 ms) |
+| Jump box keystroke | 30 ms | 1 ms |
+| Memory added by the view | 50 MB | 12 MB |
+
+Index build moved to the DB worker (step 2 follow-up): `Session._load` builds
+`PermissionIndex.build(snapshot, None)` in the job and `PermissionMatrix.apply_snapshot(snapshot,
+index)` attaches tags on the UI thread. Index build itself is ~90 ms on the worker.
+
+### Against BifrostDev (`--large`: 506 principals, 5,007 objects)
+
+Scripted run through the real `MainWindow`: connect and load 359 ms; select `lg_user_0101`
+(5,007 rows); select 3 INSERT cells, **G** → 3 staged → commit → present in
+`sys.database_permissions`; **R** → commit → gone. Descriptions saved and read back on
+`dbo.TestOrdersView` (VIEW) and `dbo.TestGetReport` (PROCEDURE), then cleared. Both failed before
+the `@level1type` fix. By object mode showed 506 principals.
+
+### Tests
+
+- 120 new unit tests in `tests/unit/qt/matrix/` (model, list, editing, bulk, privileges, mode
+  switch/reveal/jump, descriptions, view state, dialogs and flows); 437 unit tests in total pass
+  headless.
+- Coverage: bulk 98%, view_state 100%, cell_delegate 97%, grid_header 93%, jump 90%,
+  editing 89%, entity_list 88%, grid_model 85%, grid 83%, matrix_view 74%.
+
+### Deviations from the spec
+
+1. **Flat `QTableView`, not `QTreeView`.** A tree view lays out every row on each rebuild
+   (67 ms for 20,000 rows, mostly Python callbacks); a table with fixed row heights only touches
+   visible rows (4 ms). Group rows are spanned rows; collapsing removes their rows. Two more
+   whole-row scans had to go: the hidden vertical header's `highlightSections`, and
+   `QHeaderView.paintSection` asking whether neighbouring columns are fully selected
+   (`GridHeaderView` paints sections itself). Each cost ~50 ms per current-cell change or show.
+2. **The split view stays visible while refreshing** (read-only, with a banner) instead of
+   switching back to the loading page.
+3. **"12 cells selected" is shown under the grid**, not in the status bar, so it doesn't fight
+   with status messages.
+4. **Edits go through `MatrixEditor`** (`src/qt/views/matrix/editing.py`, not in the section 5
+   list). It applies the limit, the confirmation and then `Session.check_then_stage`.
+5. **Only the visible mode's pane is rebuilt on load**; the other one is rebuilt when first
+   shown.
+6. **Tags… opens the tag manager** but doesn't preselect the entity's tag yet.
+7. **Reduced motion** is read on Windows only ("Show animations in Windows"); other platforms
+   always flash on reveal.
+
+### Still to do
+
+- Manual script (section 16) on the Mac, and steps 12–14 on the work machine, plus NVDA,
+  High Contrast and 200% scaling checks (carried over from step 2).
+- FR-017a at staging is unit-tested with a non-privileged fake; the dev login is `db_owner`, so a
+  real non-privileged check needs a second login.
+- Bifrost's own audit table (`dbo.Bifrost_audit_log`) appears in the object list (as it did in
+  the Tk app). Consider hiding it in step 4.
 
 ## 19. Decisions (2026-10-01)
 

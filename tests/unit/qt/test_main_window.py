@@ -26,7 +26,7 @@ def no_settings_dialog(monkeypatch):
 
 @pytest.fixture
 def window(qtbot, session, settings, no_settings_dialog):
-    w = MainWindow(session, settings, include_dev=True)
+    w = MainWindow(session, settings)
     qtbot.addWidget(w)
     w._quitting = True  # let qtbot close it without prompts
     yield w
@@ -37,7 +37,7 @@ def test_no_duplicate_shortcuts_and_names(qtbot):
 
     host = QWidget()
     qtbot.addWidget(host)
-    registry = ActionRegistry(host, include_dev=True)
+    registry = ActionRegistry(host)
     seen = {}
     for key, action in registry.actions.items():
         assert action.text() and action.toolTip(), key
@@ -47,8 +47,7 @@ def test_no_duplicate_shortcuts_and_names(qtbot):
             seen[text] = key
     rows = registry.shortcut_rows()
     assert any(menu == "Edit" and command == "Undo" and keys != "—" for menu, command, keys in rows)
-    assert "dev_stage_sample" in registry.menus["Help"]
-    assert "dev_stage_sample" not in ActionRegistry(host, include_dev=False).actions
+    assert "dev_stage_sample" not in registry.actions  # removed in step 3
 
 
 def test_discard_has_no_menu_item_or_shortcut(qtbot):
@@ -57,7 +56,7 @@ def test_discard_has_no_menu_item_or_shortcut(qtbot):
 
     host = QWidget()
     qtbot.addWidget(host)
-    registry = ActionRegistry(host, include_dev=True)
+    registry = ActionRegistry(host)
     assert "discard" not in registry.actions
     assert all("Discard" not in command for _menu, command, _keys in registry.shortcut_rows())
 
@@ -67,7 +66,7 @@ def test_escape_does_not_discard(qtbot):
 
     host = QWidget()
     qtbot.addWidget(host)
-    registry = ActionRegistry(host, include_dev=False)
+    registry = ActionRegistry(host)
     assert all("Esc" not in s.toString() for a in registry.actions.values() for s in a.shortcuts())
 
 
@@ -76,7 +75,7 @@ def test_enabled_states_when_ready(window, session):
     assert r["refresh"].isEnabled()
     assert not r["commit"].isEnabled() and not window.status.discard_button.isEnabled() and not r["undo"].isEnabled()
     assert r["export_permissions"].isEnabled()
-    assert not r["jump"].isEnabled()
+    assert r["jump"].isEnabled() and r["mode_object"].isEnabled()
     stage(session, 2)
     assert r["commit"].isEnabled() and window.status.discard_button.isEnabled() and r["undo"].isEnabled()
     assert window.status.commit_button.text() == "Commit 2"
@@ -106,7 +105,9 @@ def test_enabled_states_needs_settings(qtbot, env, settings, no_settings_dialog)
     assert no_settings_dialog[0].endswith("Configuration file not found")
     assert not w.registry["export_permissions"].isEnabled()
     assert not w.registry["refresh"].isEnabled()
-    assert w.matrix_view.stack.currentWidget() is w.matrix_view.setup_page
+    assert w.matrix_view.stack.currentWidget() is w.matrix_view.placeholder
+    assert w.matrix_view.placeholder.stack.currentWidget() is w.matrix_view.placeholder.setup_page
+    assert not w.registry["jump"].isEnabled()
     s.worker.shutdown(1000)
 
 
@@ -237,11 +238,24 @@ def test_announce_does_not_crash(window):
     window.announce("3 changes staged")
 
 
-def test_matrix_placeholder_summary(window, session):
-    assert window.matrix_view.stack.currentWidget() is window.matrix_view.summary_page
-    assert window.matrix_view.summary_values["Principals"].text().startswith("3")
+def test_matrix_view_shows_split_view_when_loaded(window, session):
+    assert window.matrix_view.stack.currentWidget() is window.matrix_view.content
+
+
+def test_database_summary(window, session, monkeypatch):
+    shown = []
+    monkeypatch.setattr(messages, "show_info", lambda parent, title, text, details="": shown.append(text))
     stage(session, 2)
-    assert window.matrix_view.summary_values["Staged changes"].text() == "2"
+    window.registry["db_summary"].trigger()
+    assert "Principals: 3" in shown[0]
+    assert "Staged changes: 2" in shown[0]
+
+
+def test_reveal_switches_to_matrix_tab(window, session):
+    window.tabs.setCurrentIndex(mw.TAB_AUDIT)
+    stage(session, 1)
+    session.reveal(session.matrix.get_staged_changes()[0])
+    assert window.tabs.currentIndex() == mw.TAB_MATRIX
 
 
 def test_state_pill_text(window, session):

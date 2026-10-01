@@ -355,7 +355,7 @@ class PermissionMatrix:
 
     # --- Loading -----------------------------------------------------------------
 
-    def apply_snapshot(self, snapshot: MatrixSnapshot) -> RestageReport:
+    def apply_snapshot(self, snapshot: MatrixSnapshot, index: PermissionIndex | None = None) -> RestageReport:
         """
         Replace the matrix data with a new snapshot, keeping staged changes.
 
@@ -364,12 +364,15 @@ class PermissionMatrix:
 
         Args:
             snapshot: Data from fetch_snapshot()
+            index: The snapshot's index, already built (e.g. on a worker thread with
+                PermissionIndex.build(snapshot, None)); tags are attached here.
+                None = build it now.
 
         Returns:
             RestageReport: Which staged changes were kept or dropped
         """
         previous = self.get_staged_changes()
-        self._install(snapshot)
+        self._install(snapshot, index)
 
         kept: list[StagedChange] = []
         dropped_missing: list[StagedChange] = []
@@ -392,9 +395,13 @@ class PermissionMatrix:
         self._emit("reload", None)
         return RestageReport(tuple(kept), tuple(dropped_missing), tuple(already_applied))
 
-    def _install(self, snapshot: MatrixSnapshot) -> None:
-        """Build a new index from snapshot, dropping staged changes and undo history."""
-        self.index = PermissionIndex.build(snapshot, self.tag_store)
+    def _install(self, snapshot: MatrixSnapshot, index: PermissionIndex | None = None) -> None:
+        """Install a new index for snapshot, dropping staged changes and undo history."""
+        if index is None:
+            index = PermissionIndex.build(snapshot, self.tag_store)
+        else:
+            index.set_tags(self.tag_store)
+        self.index = index
         self.current_user = snapshot.current_user
         self._privileged = snapshot.privileged
         self._grant_privileges.clear()
@@ -442,6 +449,22 @@ class PermissionMatrix:
         """
         code = STATE_CODES[state]
         return self._stage_cells(((c.p, c.o, c.perm, code) for c in cells), label)
+
+    def stage_states(
+        self, items: Iterable[tuple[CellRef, PermissionState]], label: str | None = None
+    ) -> StageResult:
+        """
+        Stage a different state per cell as a single undoable action ("Make like…").
+
+        Args:
+            items: (cell, new state) pairs
+            label: Undo label (generated if None)
+
+        Returns:
+            StageResult: Counts of changed, unchanged and skipped cells
+        """
+        codes = STATE_CODES
+        return self._stage_cells(((c.p, c.o, c.perm, codes[state]) for c, state in items), label)
 
     def stage_cycle(self, cell: CellRef) -> StageResult:
         """Move one cell to its next state: NONE → GRANT → DENY → NONE."""

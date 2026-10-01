@@ -227,7 +227,8 @@ def save_object_description(
     conn: pyodbc.Connection,
     schema_name: str,
     object_name: str,
-    description: Optional[str]
+    description: Optional[str],
+    object_type: ObjectType = ObjectType.TABLE,
 ) -> None:
     """
     Save or update the MS_Description extended property for a database object.
@@ -237,6 +238,7 @@ def save_object_description(
         schema_name: Schema name
         object_name: Object name
         description: Description text (None or empty string clears the description)
+        object_type: Type of the object; picks @level1type (TABLE, VIEW, PROCEDURE, FUNCTION)
 
     Raises:
         pyodbc.Error: If extended property operation fails
@@ -259,6 +261,7 @@ def save_object_description(
         >>> save_object_description(conn, "dbo", "Orders", None)
         >>> conn.commit()
     """
+    level1type = object_type.value  # TABLE, VIEW, PROCEDURE or FUNCTION
     cursor = conn.cursor()
     try:
         # Check if property exists
@@ -272,9 +275,9 @@ def save_object_description(
                     EXEC sp_dropextendedproperty
                         @name = 'MS_Description',
                         @level0type = 'SCHEMA', @level0name = ?,
-                        @level1type = 'TABLE', @level1name = ?
+                        @level1type = ?, @level1name = ?
                     """,
-                    (schema_name, object_name)
+                    (schema_name, level1type, object_name)
                 )
         elif existing is not None:
             # Update existing property
@@ -284,9 +287,9 @@ def save_object_description(
                     @name = 'MS_Description',
                     @value = ?,
                     @level0type = 'SCHEMA', @level0name = ?,
-                    @level1type = 'TABLE', @level1name = ?
+                    @level1type = ?, @level1name = ?
                 """,
-                (description, schema_name, object_name)
+                (description, schema_name, level1type, object_name)
             )
         else:
             # Add new property
@@ -296,9 +299,9 @@ def save_object_description(
                     @name = 'MS_Description',
                     @value = ?,
                     @level0type = 'SCHEMA', @level0name = ?,
-                    @level1type = 'TABLE', @level1name = ?
+                    @level1type = ?, @level1name = ?
                 """,
-                (description, schema_name, object_name)
+                (description, schema_name, level1type, object_name)
             )
 
         # Commit is handled by caller

@@ -11,9 +11,13 @@ Bifrost is a desktop app for managing SQL Server object permissions. It shows GR
 
 Bifrost is moving from Tkinter to a PySide6 (Qt) interface built for databases with hundreds of principals and thousands of objects. The plan and status are in [specs/002-pyside6-ui-redesign/plan.md](specs/002-pyside6-ui-redesign/plan.md).
 
-- `python main.py` starts the new interface. It connects, loads, commits, shows the audit log and manages tags. The new matrix view isn't in it yet (step 3), so the Matrix tab shows a summary of what was loaded.
-- `python main.py --legacy-tk` starts the previous Tkinter interface, which you can still use to edit permissions until step 3 lands. It will be removed in step 6.
-- Set `BIFROST_DEV=1` to add **Help → Dev: stage sample changes**, which stages random changes so you can try the pending list, review and commit before the matrix view exists. Use it only against the dev database.
+- `python main.py` starts the new interface. The Matrix tab is a split view: pick a principal (or, in **By object** mode, an object) on the left, and its permissions show on the right as a grid of objects (or principals) against the 8 permissions.
+  - Click selects a cell and never changes it. Double-click or Space changes one cell (none → GRANT → DENY → none). With cells selected, **G** grants, **D** denies, **R** or Delete revokes and **U** reverts to the committed state.
+  - Click a column header to select that permission for every row, or a name to select the row. Right-click for presets, group actions ("Grant SELECT on all 86 objects in sales") and **Make like…**.
+  - Changing 5 or more cells asks first. Everything is staged until you commit, and Ctrl+Z undoes.
+  - **Ctrl+K** jumps to a principal, object or tag. **Ctrl+Shift+1** / **Ctrl+Shift+2** switch modes. **F6** moves between the list, the grid filter, the grid and the pending changes.
+  - **Help → Database summary** shows what was loaded.
+- `python main.py --legacy-tk` starts the previous Tkinter interface. It stays until step 6 in case something is missing from the new one.
 - The app logs to `logs/bifrost.log` next to `config.json` (`~/Library/Application Support/Bifrost/` on a Mac, `%APPDATA%\Bifrost\` on Windows). Set `BIFROST_DEBUG=1` for more detail.
 
 ## Running on macOS (development)

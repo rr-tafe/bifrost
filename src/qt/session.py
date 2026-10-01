@@ -13,7 +13,6 @@ worker thread; Session keeps it as an opaque handle to pass into jobs.
 from __future__ import annotations
 
 import logging
-import random
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum, auto
@@ -23,19 +22,21 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from src.db import audit as db_audit
 from src.db import connection as db_connection
+from src.db import objects as db_objects
 from src.db import permissions as db_permissions
 from src.db.permissions import LoadCancelledError
-from src.models.permission import PermissionState, PermissionType, StagedChange
+from src.models.permission import STATE_GRANT, PermissionState, StagedChange
 from src.qt.worker import DbWorker, JobCancelledError, JobHandle, run_detached
 from src.services import config as config_service
 from src.services import export as export_service
 from src.services import loader
 from src.services.matrix import CellRef, CommitPlan, MatrixChange, PermissionMatrix, RestageReport
-from src.services.matrix_index import PERM_INDEX
+from src.services.matrix_index import PERM_INDEX, PERMS, PermissionIndex, cell_code
 from src.services.tags import TagStore
+from src.validation import validate_description
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from src.models.audit_entry import AuditEntry
     from src.models.config import Configuration
@@ -155,6 +156,8 @@ class Session(QObject):
     restageReport = Signal(object)  # RestageReport
     tagsChanged = Signal()
     revealRequested = Signal(object)  # CellRef
+    stagingDenied = Signal(object)  # list[StagedChange] not staged: the admin can't grant them (FR-017a)
+    stagingBusyChanged = Signal(bool)  # True while a staging privilege check runs
 
     def __init__(self, worker: DbWorker | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -172,6 +175,8 @@ class Session(QObject):
         self._export_handle: JobHandle | None = None
         self._last_staged_count = 0
         self._shutting_down = False
+        self._staging_busy = False
+        self._descriptions: dict[tuple[str, str], str | None] = {}
 
         self._heartbeat = QTimer(self)
         self._heartbeat.setInterval(HEARTBEAT_MS)
@@ -209,8 +214,27 @@ class Session(QObject):
 
     @property
     def can_edit(self) -> bool:
-        """True when cells may be staged (step 3 views use this)."""
-        return self._state is SessionState.READY and self.matrix is not None
+        """True when cells may be staged."""
+        return self._state is SessionState.READY and self.matrix is not None and not self._staging_busy
+
+    @property
+    def staging_busy(self) -> bool:
+        """True while a privilege check for a staging action runs; further edits are ignored."""
+        return self._staging_busy
+
+    def edit_blocked_reason(self) -> str:
+        """Why editing is blocked right now, for the status bar ("" if it isn't)."""
+        if self.matrix is None:
+            return "Load data first"
+        if self._staging_busy:
+            return "Checking your grant privileges…"
+        if self._state is SessionState.COMMITTING:
+            return "Committing… editing resumes when it finishes"
+        if self._state is SessionState.READY:
+            return ""
+        if self._state is SessionState.LOADING:
+            return "Refreshing… editing resumes when it finishes"
+        return "Offline. Reconnect to make changes."
 
     @property
     def staged_count(self) -> int:
@@ -328,26 +352,13 @@ class Session(QObject):
             self.busyMessage.emit(report.message, (report.stage_number - 1, report.stage_count))
 
         def job(ctx):
-            return loader.fetch_snapshot(conn, progress=ctx.report, cancel=ctx.cancel_event)
+            snapshot = loader.fetch_snapshot(conn, progress=ctx.report, cancel=ctx.cancel_event)
+            # Build the index here, off the UI thread; tags are attached on the UI thread
+            return snapshot, PermissionIndex.build(snapshot, None)
 
-        def done(snapshot: MatrixSnapshot) -> None:
+        def done(result: tuple[MatrixSnapshot, PermissionIndex]) -> None:
             self._load_handle = None
-            if self.matrix is None:
-                self.matrix = PermissionMatrix(None, self.config.schema if self.config else "dbo", self.tag_store)
-                self.matrix.subscribe(self._on_matrix_change)
-            report = self.matrix.apply_snapshot(snapshot)
-            self.current_user = snapshot.current_user
-            self.last_load = self._summarise(snapshot)
-            self.busyMessage.emit("", None)
-            self._set_state(SessionState.READY)
-            self.dataLoaded.emit(self.last_load)
-            summary = self.last_load
-            self.statusMessage.emit(
-                f"Loaded {summary.principals:,} principals and {summary.objects:,} objects", STATUS_MS
-            )
-            self.announce.emit(f"Loaded {summary.principals:,} principals and {summary.objects:,} objects")
-            if report.dropped_missing or report.already_applied:
-                self.restageReport.emit(report)
+            self.apply_snapshot(*result)
 
         def failed(error: BaseException) -> None:
             self._load_handle = None
@@ -366,6 +377,23 @@ class Session(QObject):
                 self.statusMessage.emit("Refresh cancelled" if cancelled else message, STATUS_MS)
 
         self._load_handle = self.worker.submit("load", job, done, failed, on_progress=progress)
+
+    def apply_snapshot(self, snapshot: MatrixSnapshot, index: PermissionIndex | None = None) -> None:
+        """Install a loaded snapshot (keeping staged changes) and go to READY. Tests call it directly."""
+        if self.matrix is None:
+            self.matrix = PermissionMatrix(None, self.config.schema if self.config else "dbo", self.tag_store)
+            self.matrix.subscribe(self._on_matrix_change)
+        report = self.matrix.apply_snapshot(snapshot, index)
+        self.current_user = snapshot.current_user
+        self.last_load = self._summarise(snapshot)
+        self.busyMessage.emit("", None)
+        self._set_state(SessionState.READY)
+        self.dataLoaded.emit(self.last_load)
+        summary = self.last_load
+        self.statusMessage.emit(f"Loaded {summary.principals:,} principals and {summary.objects:,} objects", STATUS_MS)
+        self.announce.emit(f"Loaded {summary.principals:,} principals and {summary.objects:,} objects")
+        if report.dropped_missing or report.already_applied:
+            self.restageReport.emit(report)
 
     def _summarise(self, snapshot: MatrixSnapshot) -> LoadSummary:
         index = self.matrix.index
@@ -517,6 +545,128 @@ class Session(QObject):
                 self._connection_lost(error)
 
         self.worker.submit("commit", lambda _ctx: PermissionMatrix.execute_commit(conn, plan, admin), done, failed)
+
+    # --- Staging ---------------------------------------------------------------------
+
+    def check_then_stage(
+        self,
+        items: Iterable[tuple[CellRef, PermissionState]],
+        label: str | None = None,
+        on_done: Callable[[int], None] | None = None,
+    ) -> None:
+        """
+        Stage (cell, state) pairs as one undo step, after the FR-017a grant check.
+
+        Cells that would become GRANT are checked against the admin's own
+        permissions: from cache, or with one worker query for the unknown ones.
+        Allowed cells are staged; denied ones are left alone and reported with
+        stagingDenied. Edits are ignored while the check runs (staging_busy).
+
+        Args:
+            items: (cell, new state) pairs
+            label: Undo label (generated if None)
+            on_done: Called with the number of cells changed (0 if nothing was staged)
+        """
+        if not self.can_edit:
+            self.statusMessage.emit(self.edit_blocked_reason(), STATUS_SHORT_MS)
+            return
+        matrix = self.matrix
+        items = list(items)
+        index = matrix.index
+        unknown: dict[tuple[str, str, object], None] = {}
+        for cell, state in items:
+            if state is not PermissionState.GRANT:
+                continue
+            if cell_code(index.row_state(cell.p, cell.o), cell.perm) == STATE_GRANT:
+                continue  # already GRANT; nothing to check
+            if matrix.known_grant_privilege(cell) is None:
+                obj = index.objects[cell.o]
+                unknown[(obj.schema_name, obj.object_name, PERMS[cell.perm])] = None
+        if not unknown:
+            self._finish_stage(items, label, on_done)
+            return
+
+        conn = self._conn
+        targets = list(unknown)
+        self._set_staging_busy(True)
+        self.busyMessage.emit("Checking your grant privileges…", None)
+
+        def done(results) -> None:
+            self._set_staging_busy(False)
+            self.busyMessage.emit("", None)
+            if self.matrix is not matrix:
+                return
+            matrix.remember_grant_privileges(results)
+            if self._state is not SessionState.READY:
+                self.statusMessage.emit(self.edit_blocked_reason(), STATUS_MS)
+                return
+            self._finish_stage(items, label, on_done)
+
+        def failed(error: BaseException) -> None:
+            self._set_staging_busy(False)
+            self.busyMessage.emit("", None)
+            if db_connection.is_connection_error(error):
+                self._connection_lost(error)
+            else:
+                self.statusMessage.emit(f"Couldn't check your privileges: {error}. Nothing was staged.", 0)
+
+        self.worker.submit("stage-privileges", lambda _ctx: db_permissions.check_grant_privileges(conn, targets), done, failed)
+
+    def _finish_stage(
+        self,
+        items: list[tuple[CellRef, PermissionState]],
+        label: str | None,
+        on_done: Callable[[int], None] | None,
+    ) -> None:
+        matrix = self.matrix
+        index = matrix.index
+        allowed: list[tuple[CellRef, PermissionState]] = []
+        denied: list[StagedChange] = []
+        for cell, state in items:
+            if (
+                state is PermissionState.GRANT
+                and cell_code(index.row_state(cell.p, cell.o), cell.perm) != STATE_GRANT
+                and matrix.known_grant_privilege(cell) is False
+            ):
+                denied.append(self._staged_change(cell, state))
+            else:
+                allowed.append((cell, state))
+        result = matrix.stage_states(allowed, label)
+        if result.group is not None:
+            self.statusMessage.emit(result.group.label, STATUS_SHORT_MS)
+            self.announce.emit(result.group.label)
+        if denied:
+            self.stagingDenied.emit(denied)
+        if on_done is not None:
+            on_done(result.changed)
+
+    def _staged_change(self, cell: CellRef, state: PermissionState) -> StagedChange:
+        index = self.matrix.index
+        obj = index.objects[cell.o]
+        return StagedChange(
+            user_login=index.principals[cell.p].login_name,
+            schema_name=obj.schema_name,
+            object_name=obj.object_name,
+            permission_type=PERMS[cell.perm],
+            previous_state=index.cell(cell.p, cell.o, cell.perm).committed,
+            new_state=state,
+        )
+
+    def _set_staging_busy(self, busy: bool) -> None:
+        if busy != self._staging_busy:
+            self._staging_busy = busy
+            self.stagingBusyChanged.emit(busy)
+
+    def revert_cells(self, cells: Iterable[CellRef], label: str | None = None) -> int:
+        """Set cells back to their committed state as one undo step. Returns cells changed."""
+        if not self.can_edit:
+            self.statusMessage.emit(self.edit_blocked_reason(), STATUS_SHORT_MS)
+            return 0
+        result = self.matrix.revert(cells, label)
+        if result.group is not None:
+            self.statusMessage.emit(result.group.label, STATUS_SHORT_MS)
+            self.announce.emit(result.group.label)
+        return result.changed
 
     # --- Discard, undo, redo, revert ----------------------------------------------
 
@@ -768,29 +918,89 @@ class Session(QObject):
             logger.error("Saving tags failed: %s", error)
         return error
 
-    # --- Dev helper -------------------------------------------------------------------
+    # --- Object descriptions (FR-023) ------------------------------------------------
 
-    def dev_stage_sample(self, count: int, seed: int | None = None) -> int:
-        """
-        Stage `count` random applicable changes as one undo step (BIFROST_DEV only, until step 3).
+    def cached_description(self, o: int) -> tuple[bool, str | None]:
+        """Return (known, text) for object o's description from this session's cache."""
+        obj = self.matrix.index.objects[o]
+        key = (obj.schema_name, obj.object_name)
+        return (key in self._descriptions, self._descriptions.get(key))
 
-        Returns:
-            int: Number of cells changed
+    def load_description(self, o: int, callback: Callable[[str | None, str | None], None]) -> None:
         """
-        if not self.can_edit:
-            self.statusMessage.emit("Load data first", STATUS_SHORT_MS)
-            return 0
-        rng = random.Random(seed)
-        index = self.matrix.index
-        cells: list[CellRef] = []
-        attempts = 0
-        while len(cells) < count and attempts < count * 50 and index.objects and index.principals:
-            attempts += 1
-            o = rng.randrange(len(index.objects))
-            perm = rng.choice([i for i in range(len(PermissionType)) if index.is_applicable(o, i)])
-            cells.append(CellRef(rng.randrange(len(index.principals)), o, perm))
-        result = self.matrix.stage(cells, PermissionState.GRANT, label=f"Dev: stage {count} sample changes")
-        return result.changed
+        Load object o's MS_Description on the worker (cached for the session).
+
+        callback(text, error) runs on the UI thread. Only the latest queued request
+        runs, so moving quickly through objects doesn't queue a query per object.
+        """
+        if self.matrix is None:
+            callback(None, "No data loaded")
+            return
+        obj = self.matrix.index.objects[o]
+        key = (obj.schema_name, obj.object_name)
+        if key in self._descriptions:
+            callback(self._descriptions[key], None)
+            return
+        if self._conn is None:
+            callback(None, "Not connected")
+            return
+        conn = self._conn
+
+        def done(text: str | None) -> None:
+            self._descriptions[key] = text
+            callback(text, None)
+
+        def failed(error: BaseException) -> None:
+            if db_connection.is_connection_error(error):
+                self._connection_lost(error)
+            callback(None, str(error))
+
+        self.worker.submit(
+            "description",
+            lambda _ctx: db_objects.load_object_description(conn, *key),
+            done,
+            failed,
+            coalesce=True,
+        )
+
+    def save_description(self, o: int, text: str, callback: Callable[[str | None], None]) -> None:
+        """
+        Save object o's description now (not staged, not audited). callback(error) on the UI thread.
+
+        An empty text removes the description.
+        """
+        errors = validate_description(text)
+        if errors:
+            callback("; ".join(errors))
+            return
+        if self.matrix is None or self._conn is None or self._state is not SessionState.READY:
+            callback("Not connected. Reconnect to save the description.")
+            return
+        obj = self.matrix.index.objects[o]
+        key = (obj.schema_name, obj.object_name)
+        object_type = obj.object_type
+        conn = self._conn
+        value = text.strip() or None
+
+        def job(_ctx) -> None:
+            try:
+                db_objects.save_object_description(conn, key[0], key[1], value, object_type)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        def done(_result) -> None:
+            self._descriptions[key] = value
+            self.statusMessage.emit(f"Saved the description of {key[0]}.{key[1]}", STATUS_SHORT_MS)
+            callback(None)
+
+        def failed(error: BaseException) -> None:
+            if db_connection.is_connection_error(error):
+                self._connection_lost(error)
+            callback(str(error))
+
+        self.worker.submit("save-description", job, done, failed)
 
     # --- Shutdown ---------------------------------------------------------------------
 
