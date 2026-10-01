@@ -55,6 +55,8 @@ The Settings window still says "Windows Authentication". On a Mac that's expecte
 
 You can re-run `./dev/setup.sh` at any time. It keeps your existing data and passwords.
 
+To test at work-database scale, run `./dev/setup.sh --large`. It also loads `dev/seed_large.sql`, which adds 500 principals (`lg_user_0001` to `lg_user_0500`), 5,000 objects across schemas `lg01` to `lg20`, and about 49,000 explicit permissions. It takes about 15 seconds the first time and is safe to re-run. To go back to the small dataset, wipe the database (below) and run `./dev/setup.sh` without `--large`.
+
 ### Stopping, resetting and running tests
 
 ```bash
@@ -68,6 +70,13 @@ docker compose -f dev/docker-compose.yml --env-file dev/.env down -v
 
 # Run the tests
 .venv/bin/python -m pytest
+
+# Run only the fast tests (what the pre-commit hook runs)
+.venv/bin/python -m pytest -m "not slow and not integration"
+
+# Run the performance tests and print timings
+# (1,000 principals x 20,000 objects x 200,000 permissions, synthetic)
+.venv/bin/python -m pytest -m slow tests/perf -s --no-cov
 ```
 
 ### First-time setup on a new Mac

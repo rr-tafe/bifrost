@@ -51,6 +51,7 @@ import os
 
 import pyodbc
 
+from src.db.sql import quote_ident
 from src.models.config import Configuration
 
 
@@ -296,7 +297,7 @@ def ensure_schema_exists(conn: pyodbc.Connection, schema_name: str) -> None:
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema_name):
             raise ValueError(f"Invalid schema name: {schema_name}")
 
-        cursor.execute(f"CREATE SCHEMA [{schema_name}]")
+        cursor.execute(f"CREATE SCHEMA {quote_ident(schema_name)}")
         conn.commit()
 
     except pyodbc.Error as e:

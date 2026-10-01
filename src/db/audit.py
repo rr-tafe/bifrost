@@ -15,7 +15,7 @@ Usage:
         fetch_recent_audit_entries
     )
     from src.db.connection import create_connection
-    from src.models.audit_entry import AuditEntry
+from src.models.audit_entry import AuditEntry
     from datetime import datetime, timezone
 
     conn = create_connection(config)
@@ -49,6 +49,7 @@ Usage:
 import pyodbc
 from datetime import datetime
 from typing import Optional
+from src.db.sql import quote_ident
 from src.models.audit_entry import AuditEntry
 
 
@@ -117,7 +118,7 @@ def ensure_audit_log_table(conn: pyodbc.Connection, schema: str = "dbo") -> None
 
         # Create table (dynamic SQL required for schema name substitution)
         create_table_stmt = f"""
-        CREATE TABLE [{schema}].[Bifrost_audit_log] (
+        CREATE TABLE {quote_ident(schema)}.[Bifrost_audit_log] (
             id               BIGINT         IDENTITY(1,1)  NOT NULL,
             administrator    NVARCHAR(128)                 NOT NULL,
             affected_user    NVARCHAR(128)                 NOT NULL,
@@ -137,13 +138,13 @@ def ensure_audit_log_table(conn: pyodbc.Connection, schema: str = "dbo") -> None
         );
 
         CREATE NONCLUSTERED INDEX [IX_Bifrost_audit_log_changed_at]
-            ON [{schema}].[Bifrost_audit_log] (changed_at DESC);
+            ON {quote_ident(schema)}.[Bifrost_audit_log] (changed_at DESC);
 
         CREATE NONCLUSTERED INDEX [IX_Bifrost_audit_log_affected_user]
-            ON [{schema}].[Bifrost_audit_log] (affected_user, changed_at DESC);
+            ON {quote_ident(schema)}.[Bifrost_audit_log] (affected_user, changed_at DESC);
 
         CREATE NONCLUSTERED INDEX [IX_Bifrost_audit_log_object]
-            ON [{schema}].[Bifrost_audit_log] (schema_name, object_name, changed_at DESC);
+            ON {quote_ident(schema)}.[Bifrost_audit_log] (schema_name, object_name, changed_at DESC);
         """
 
         cursor.execute(create_table_stmt)
@@ -192,7 +193,7 @@ def write_audit_entries(
         ids = []
         for entry in entries:
             stmt = f"""
-                INSERT INTO [{schema}].[Bifrost_audit_log] (
+                INSERT INTO {quote_ident(schema)}.[Bifrost_audit_log] (
                     administrator,
                     affected_user,
                     schema_name,
@@ -362,7 +363,7 @@ def fetch_audit_entries(
                 new_state,
                 changed_at,
                 explanation
-            FROM [{schema}].[Bifrost_audit_log]
+            FROM {quote_ident(schema)}.[Bifrost_audit_log]
             {where_clause}
             ORDER BY changed_at DESC, id DESC
         """
@@ -445,7 +446,7 @@ def get_audit_entry_count(
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
             raise ValueError(f"Invalid schema name: {schema}")
 
-        query = f"SELECT COUNT(*) FROM [{schema}].[Bifrost_audit_log]"
+        query = f"SELECT COUNT(*) FROM {quote_ident(schema)}.[Bifrost_audit_log]"
         cursor.execute(query)
         row = cursor.fetchone()
         return row[0] if row else 0

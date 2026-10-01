@@ -36,9 +36,17 @@ Usage:
         conn.close()
 """
 
-import pyodbc
+import threading
+from collections.abc import Callable, Sequence
 from typing import Optional
+
+import pyodbc
+
+from src.db.sql import quote_ident
 from src.models.permission import (
+    PERMISSION_INDEX_BY_NAME,
+    STATE_DENY,
+    STATE_GRANT,
     PermissionAssignment,
     PermissionState,
     PermissionType,
@@ -49,6 +57,9 @@ from src.models.db_object import ObjectType
 
 def fetch_all_permissions(conn: pyodbc.Connection) -> list[PermissionAssignment]:
     """
+    Deprecated: use fetch_permission_rows(), which is faster at scale.
+    Kept for existing callers and tests.
+
     Fetch all object-level permissions for all users and objects.
 
     Args:
@@ -281,25 +292,16 @@ def apply_permission_changes(
     try:
         for change in changes:
             try:
-                # Generate T-SQL statement based on action
+                # Generate T-SQL statement based on action. Identifiers are quoted;
+                # the permission name comes from the PermissionType enum.
+                securable = f"{quote_ident(change.schema_name)}.{quote_ident(change.object_name)}"
+                principal = quote_ident(change.user_login)
                 if change.action == "GRANT":
-                    stmt = f"""
-                        GRANT {change.permission_type.value}
-                        ON [{change.schema_name}].[{change.object_name}]
-                        TO [{change.user_login}]
-                    """
+                    stmt = f"GRANT {change.permission_type.value} ON {securable} TO {principal}"
                 elif change.action == "DENY":
-                    stmt = f"""
-                        DENY {change.permission_type.value}
-                        ON [{change.schema_name}].[{change.object_name}]
-                        TO [{change.user_login}]
-                    """
+                    stmt = f"DENY {change.permission_type.value} ON {securable} TO {principal}"
                 else:  # REVOKE
-                    stmt = f"""
-                        REVOKE {change.permission_type.value}
-                        ON [{change.schema_name}].[{change.object_name}]
-                        FROM [{change.user_login}]
-                    """
+                    stmt = f"REVOKE {change.permission_type.value} ON {securable} FROM {principal}"
 
                 cursor.execute(stmt)
                 results.append((change, None))  # Success
@@ -390,6 +392,168 @@ def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str
                 permissions.add((schema_name, object_name, perm_type))
 
         return permissions
+
+    finally:
+        cursor.close()
+
+
+# sys.database_permissions.state: G = GRANT, W = GRANT WITH GRANT OPTION, D = DENY.
+# Grant option is not tracked in v1, so W is treated as GRANT.
+_STATE_CODE_BY_DB_STATE = {"G": STATE_GRANT, "W": STATE_GRANT, "D": STATE_DENY}
+
+# SQL Server allows at most 2,100 parameters per statement; each target uses 3.
+PRIVILEGE_CHECK_CHUNK = 600
+
+
+class LoadCancelledError(Exception):
+    """Raised when a long-running read is cancelled through its cancel event."""
+
+
+def fetch_permission_rows(
+    conn: pyodbc.Connection,
+    batch_size: int = 10_000,
+    on_batch: Callable[[int], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """
+    Fetch every object-level GRANT/DENY as compact id tuples.
+
+    Args:
+        conn: Active database connection
+        batch_size: Rows per fetchmany() call
+        on_batch: Optional callback(total_rows_so_far) after each batch
+        cancel: Optional event; when set, the fetch stops between batches
+
+    Returns:
+        list[tuple[int, int, int, int]]:
+            (grantee_principal_id, object_id, permission index, state code).
+            Permission index follows PERMISSION_ORDER; state code is STATE_GRANT
+            or STATE_DENY.
+
+    Raises:
+        LoadCancelledError: If cancel is set between batches
+
+    Note:
+        No joins and no ORDER BY. Rows for principals or objects Bifrost does not
+        manage are filtered out later by the matrix index.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT p.grantee_principal_id, p.major_id, p.permission_name, p.state
+            FROM sys.database_permissions AS p
+            WHERE p.class = 1
+              AND p.minor_id = 0
+              AND p.permission_name IN (
+                  'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                  'EXECUTE', 'ALTER', 'REFERENCES', 'VIEW DEFINITION'
+              )
+              AND p.state IN ('G', 'W', 'D')
+            """
+        )
+
+        rows: list[tuple[int, int, int, int]] = []
+        perm_index = PERMISSION_INDEX_BY_NAME
+        state_code = _STATE_CODE_BY_DB_STATE
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise LoadCancelledError("Loading permissions was cancelled")
+            batch = cursor.fetchmany(batch_size)
+            if not batch:
+                break
+            for principal_id, object_id, permission_name, state in batch:
+                perm_idx = perm_index.get(permission_name.strip())
+                code = state_code.get(state.strip())
+                if perm_idx is None or code is None:
+                    continue
+                rows.append((principal_id, object_id, perm_idx, code))
+            if on_batch is not None:
+                on_batch(len(rows))
+
+        return rows
+
+    finally:
+        cursor.close()
+
+
+def fetch_privilege_flags(conn: pyodbc.Connection) -> bool:
+    """
+    Check whether the connected account can grant anything in this database.
+
+    Args:
+        conn: Active database connection
+
+    Returns:
+        bool: True if the account is sysadmin, db_owner, or has CONTROL on the
+            database. Grant privilege checks can then be skipped.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                IS_SRVROLEMEMBER('sysadmin'),
+                IS_ROLEMEMBER('db_owner'),
+                HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONTROL')
+            """
+        )
+        row = cursor.fetchone()
+        return any(value == 1 for value in row)
+    finally:
+        cursor.close()
+
+
+def check_grant_privileges(
+    conn: pyodbc.Connection,
+    targets: Sequence[tuple[str, str, PermissionType]],
+) -> dict[tuple[str, str, PermissionType], bool]:
+    """
+    Check which permissions the connected account holds, in as few queries as possible.
+
+    Used for FR-017a: an administrator may only GRANT a permission they hold.
+
+    Args:
+        conn: Active database connection
+        targets: (schema_name, object_name, permission_type) tuples to check
+
+    Returns:
+        dict: Each target mapped to True if HAS_PERMS_BY_NAME returns 1
+
+    Note:
+        Names are passed as parameters and quoted with QUOTENAME in T-SQL, so
+        names containing quotes, brackets or dots are handled safely. Targets are
+        checked in chunks of PRIVILEGE_CHECK_CHUNK per statement.
+    """
+    unique_targets = list(dict.fromkeys(targets))
+    results: dict[tuple[str, str, PermissionType], bool] = {}
+    if not unique_targets:
+        return results
+
+    by_name = {(s, o, p.value): (s, o, p) for s, o, p in unique_targets}
+    cursor = conn.cursor()
+    try:
+        for start in range(0, len(unique_targets), PRIVILEGE_CHECK_CHUNK):
+            chunk = unique_targets[start : start + PRIVILEGE_CHECK_CHUNK]
+            values = ", ".join(["(?, ?, ?)"] * len(chunk))
+            params: list[str] = []
+            for schema_name, object_name, permission_type in chunk:
+                params.extend((schema_name, object_name, permission_type.value))
+            cursor.execute(
+                "SELECT t.s, t.o, t.perm, "
+                "HAS_PERMS_BY_NAME(QUOTENAME(t.s) + '.' + QUOTENAME(t.o), 'OBJECT', t.perm) "
+                f"FROM (VALUES {values}) AS t(s, o, perm)",
+                params,
+            )
+            for schema_name, object_name, perm_name, has_perm in cursor.fetchall():
+                key = by_name.get((schema_name, object_name, perm_name))
+                if key is not None:
+                    results[key] = has_perm == 1
+
+        # Anything the server didn't return (should not happen) counts as not held
+        for target in unique_targets:
+            results.setdefault(target, False)
+        return results
 
     finally:
         cursor.close()

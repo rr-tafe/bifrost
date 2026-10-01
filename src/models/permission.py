@@ -108,6 +108,28 @@ class PermissionState(Enum):
         return cycle[self]
 
 
+# Fixed column order for the 8 permissions. The matrix index stores one bit per
+# permission in this order, so it must never change at runtime.
+PERMISSION_ORDER: tuple[PermissionType, ...] = tuple(PermissionType)
+PERMISSION_INDEX: dict[PermissionType, int] = {p: i for i, p in enumerate(PERMISSION_ORDER)}
+PERMISSION_INDEX_BY_NAME: dict[str, int] = {p.value: i for i, p in enumerate(PERMISSION_ORDER)}
+
+# Small-int codes for PermissionState, used by the matrix index and loader
+STATE_NONE = 0
+STATE_GRANT = 1
+STATE_DENY = 2
+STATE_CODES: dict[PermissionState, int] = {
+    PermissionState.NONE: STATE_NONE,
+    PermissionState.GRANT: STATE_GRANT,
+    PermissionState.DENY: STATE_DENY,
+}
+CODE_STATES: tuple[PermissionState, PermissionState, PermissionState] = (
+    PermissionState.NONE,
+    PermissionState.GRANT,
+    PermissionState.DENY,
+)
+
+
 @dataclass(frozen=True)
 class PermissionAssignment:
     """

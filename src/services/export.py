@@ -25,12 +25,18 @@ Usage:
 """
 
 import csv
+import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from src.models.user import DatabaseUser
 from src.models.db_object import DatabaseObject
-from src.models.permission import PermissionAssignment, PermissionType
+from src.models.permission import CODE_STATES, PermissionAssignment, PermissionType
 from src.models.audit_entry import AuditEntry
+from src.services.matrix_index import PERMS, cell_code, diff_mask
+
+if TYPE_CHECKING:
+    from src.services.matrix_index import PermissionIndex
 
 
 def export_permissions_csv(
@@ -135,6 +141,98 @@ def export_permissions_csv(
                         if progress_callback:
                             progress_callback(current_row, total_rows)
 
+        return None
+
+    except PermissionError:
+        return f"Permission denied writing to {file_path}"
+    except Exception as e:
+        return f"Failed to export permissions: {str(e)}"
+
+
+# Report export progress every this many rows
+EXPORT_PROGRESS_EVERY = 50_000
+
+
+def export_permissions_from_index(
+    file_path: str | Path,
+    index: "PermissionIndex",
+    include_none: bool = False,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> str | None:
+    """
+    Export the permission matrix from a PermissionIndex to a CSV file.
+
+    Same columns and row order as export_permissions_csv(), but reads packed
+    rows directly, so it stays fast for large databases.
+
+    Args:
+        file_path: Path to the output CSV file
+        index: Permission index to export (effective state: staged over committed)
+        include_none: Also write cells with no permission (FR-015 full export).
+            On a large database this is principals × objects × ~7 rows (can be
+            hundreds of millions), so callers should warn before using it.
+        progress_callback: Optional callback(rows_written, total_rows), called
+            every EXPORT_PROGRESS_EVERY rows and at the end
+        cancel: Optional event; when set, the export stops and the partial file is deleted
+
+    Returns:
+        Optional[str]: Error message if the export fails or is cancelled, None if successful
+
+    Note:
+        Do not pass an index that another thread may modify while this runs.
+    """
+    file_path = Path(file_path)
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if include_none:
+            applicable_cells = sum(mask.bit_count() for mask in index.object_applicable)
+            total_rows = applicable_cells * len(index.principals)
+            cells = index.iter_all_cells(effective=True)
+        else:
+            rows = set(index.committed) | set(index.staged)
+            total_rows = sum(
+                diff_mask(index.row_state(p, o), 0).bit_count() for p, o in rows
+            )
+            cells = index.iter_explicit(effective=True)
+
+        principals = index.principals
+        objects = index.objects
+        committed_row = index.committed_row
+        written = 0
+
+        with open(file_path, "w", newline="", encoding="utf-8", buffering=1 << 20) as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                ["User", "Schema", "Object", "ObjectType", "Permission", "State", "HasStagedChange"]
+            )
+            for p, o, perm_idx, code in cells:
+                obj = objects[o]
+                committed_code = cell_code(committed_row(p, o), perm_idx)
+                writer.writerow(
+                    [
+                        principals[p].login_name,
+                        obj.schema_name,
+                        obj.object_name,
+                        obj.object_type.value,
+                        PERMS[perm_idx].value,
+                        CODE_STATES[code].value,
+                        committed_code != code,
+                    ]
+                )
+                written += 1
+                if written % EXPORT_PROGRESS_EVERY == 0:
+                    if cancel is not None and cancel.is_set():
+                        break
+                    if progress_callback:
+                        progress_callback(written, total_rows)
+
+        if cancel is not None and cancel.is_set():
+            file_path.unlink(missing_ok=True)
+            return "Export cancelled"
+        if progress_callback:
+            progress_callback(written, total_rows)
         return None
 
     except PermissionError:

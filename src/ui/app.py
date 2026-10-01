@@ -467,7 +467,7 @@ class BifrostApp(tk.Tk):
             current_user = get_current_user(self.connection)
 
             # Build permission matrix (loads users, objects, permissions internally)
-            self.matrix = PermissionMatrix(self.connection, self.config.schema)
+            self.matrix = PermissionMatrix(self.connection, self.config.schema, self.tag_store)
             self.matrix.load()
 
             # Update UI
@@ -665,6 +665,8 @@ class BifrostApp(tk.Tk):
 
         def on_close_tags() -> None:
             self._tags_view = None
+            if self.matrix:
+                self.matrix.set_tag_store(self.tag_store)
             if self._tags_window is not None:
                 self._tags_window.destroy()
             self._tags_window = None
@@ -863,7 +865,7 @@ class BifrostApp(tk.Tk):
 
             current_user = get_current_user(self.connection)
 
-            new_matrix = PermissionMatrix(self.connection, self.config.schema)
+            new_matrix = PermissionMatrix(self.connection, self.config.schema, self.tag_store)
             new_matrix.load()
 
             for change in staged:
@@ -946,7 +948,7 @@ class BifrostApp(tk.Tk):
             return
 
         try:
-            from src.services.export import export_permissions_csv, get_suggested_filename
+            from src.services.export import export_permissions_from_index, get_suggested_filename
 
             database = self.config.database if self.config else "database"
             suggested_name = get_suggested_filename("permissions", database)
@@ -960,11 +962,9 @@ class BifrostApp(tk.Tk):
             if not file_path:
                 return
 
-            error = export_permissions_csv(
+            error = export_permissions_from_index(
                 file_path=file_path,
-                users=self.matrix.users,
-                objects=self.matrix.objects,
-                assignments=self.matrix.assignments,
+                index=self.matrix.index,
                 include_none=True,
             )
 

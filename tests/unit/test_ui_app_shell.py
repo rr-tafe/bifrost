@@ -210,7 +210,12 @@ def test_tags_dialog_lifecycle_and_data_refresh(monkeypatch):
     app._tags_window = None
     app._tags_view = None
     app.tag_store = object()
-    app.matrix = SimpleNamespace(users=["jsmith"], objects=["dbo.Orders"])
+    tag_store_updates = []
+    app.matrix = SimpleNamespace(
+        users=["jsmith"],
+        objects=["dbo.Orders"],
+        set_tag_store=tag_store_updates.append,
+    )
     app._views = {}
 
     app_module.BifrostApp._open_tags_dialog(app)
@@ -235,6 +240,7 @@ def test_tags_dialog_lifecycle_and_data_refresh(monkeypatch):
 
     assert app._tags_window is None
     assert app._tags_view is None
+    assert tag_store_updates == [app.tag_store]
 
 
 def test_connection_loss_dialog_actions_route_correctly():

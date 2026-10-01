@@ -129,6 +129,7 @@ class DatabaseObject:
     object_type: ObjectType
     tags: list[str] = field(default_factory=list)
     description: str | None = None
+    object_id: int = 0  # sys.objects.object_id (0 = unknown)
 
     def __post_init__(self):
         """Validate required fields after initialization."""

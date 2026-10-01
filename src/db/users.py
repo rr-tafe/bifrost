@@ -63,6 +63,7 @@ def fetch_all_users(conn: pyodbc.Connection) -> list[DatabaseUser]:
     try:
         query = """
             SELECT
+                principal_id,
                 name,
                 type
             FROM sys.database_principals
@@ -82,6 +83,7 @@ def fetch_all_users(conn: pyodbc.Connection) -> list[DatabaseUser]:
                 principal_type=row.type.strip(),  # Strip whitespace from CHAR(1)
                 is_disabled=False,  # Not available in sys.database_principals
                 tags=[],  # Tags loaded separately by TagStore
+                principal_id=row.principal_id,
             )
             users.append(user)
 
@@ -115,6 +117,7 @@ def fetch_user_by_login(conn: pyodbc.Connection, login_name: str) -> Optional[Da
     try:
         query = """
             SELECT
+                principal_id,
                 name,
                 type
             FROM sys.database_principals
@@ -135,6 +138,7 @@ def fetch_user_by_login(conn: pyodbc.Connection, login_name: str) -> Optional[Da
             principal_type=row.type.strip(),
             is_disabled=False,  # Not available in sys.database_principals
             tags=[],
+            principal_id=row.principal_id,
         )
 
     finally:

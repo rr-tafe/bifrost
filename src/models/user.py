@@ -46,6 +46,7 @@ class DatabaseUser:
     principal_type: str  # 'S' (SQL), 'U' (Windows), 'G' (group)
     is_disabled: bool = False
     tags: list[str] = field(default_factory=list)
+    principal_id: int = 0  # sys.database_principals.principal_id (0 = unknown)
 
     def __post_init__(self):
         """Validate required fields after initialization."""

@@ -56,7 +56,6 @@ markers = [
 branch = true
 omit = [
     "src/db/*",
-    "src/services/matrix.py",
     "src/ui/*",
 ]
 

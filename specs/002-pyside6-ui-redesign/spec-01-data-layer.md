@@ -321,7 +321,7 @@ class LoadProgress:
     rows: int             # rows fetched so far in this stage
     message: str          # "Loading permissions… 120,000 rows"
 
-class LoadCancelled(Exception): ...
+class LoadCancelledError(Exception): ...
 
 def fetch_snapshot(
     conn: pyodbc.Connection,
@@ -334,7 +334,7 @@ def fetch_snapshot(
 - Calls `progress` at the start of each stage and every 10,000 rows within the permissions
   stage. `progress` may be called from a worker thread; it must not touch UI objects directly
   (step 2 marshals it to the UI thread).
-- Checks `cancel` between stages and between fetch batches; raises `LoadCancelled` if set.
+- Checks `cancel` between stages and between fetch batches; raises `LoadCancelledError` if set.
 - Records per-stage wall time in `timings`.
 - Does not commit or roll back; it only reads.
 
@@ -688,7 +688,7 @@ New and changed tests (all in `tests/unit/` unless noted; no DB needed):
 
 `test_loader.py`
 - `fetch_snapshot` with a fake connection/cursor: stage order, progress calls, batching with
-  `fetchmany`, `LoadCancelled` between batches, state mapping `G`/`W`/`D`, timings recorded.
+  `fetchmany`, `LoadCancelledError` between batches, state mapping `G`/`W`/`D`, timings recorded.
 
 `test_matrix_service.py` (extend `test_services.py` or new file)
 - `stage` groups one undo entry; `undo`/`redo` restore effective states; max 50 groups.
@@ -714,28 +714,96 @@ All existing tests must still pass. That includes the Tk UI tests
 
 ## 13. Acceptance criteria
 
-- [ ] All new modules and functions in sections 5–10 exist with the signatures given (names may
-      change if a better name is found; update this spec when they do).
-- [ ] `pytest` passes (unit), and `pytest -m slow tests/perf` passes on the dev Mac.
-- [ ] Perf numbers measured and recorded in "Results" below.
-- [ ] `fetch_snapshot` timings against `dev/seed_large.sql` recorded.
+- [x] All new modules and functions in sections 5–10 exist with the signatures given (names may
+      change if a better name is found; update this spec when they do). Deviations are listed
+      in Results.
+- [x] `pytest` passes (unit), and `pytest -m slow tests/perf` passes on the dev Mac.
+- [x] Perf numbers measured and recorded in "Results" below.
+- [x] `fetch_snapshot` timings against `dev/seed_large.sql` recorded.
 - [ ] Tk app still launches, loads, toggles, commits, cancels, refreshes and exports against
       BifrostDev with no visible change in behavior (other than being faster and tag filters
-      working).
-- [ ] P3–P6 regression tests exist and pass.
-- [ ] `ruff check` clean for changed files.
-- [ ] `pyproject.toml` coverage `omit` no longer excludes `src/services/matrix.py`. New service
-      modules are ≥ 80% covered.
-- [ ] [plan.md](plan.md) status table updated.
+      working). **Partly verified**: the legacy API the Tk app calls (`load`, `stage_change`,
+      `validate_grant_privilege`, `commit`, `refresh`, `get_assignment`) was run end to end
+      against BifrostDev with seed_large, including audit rows. The Tk window itself has not
+      been clicked through yet.
+- [x] P3–P6 regression tests exist and pass.
+- [x] `ruff check` clean for new files. Edited existing files have no new issues (their
+      pre-existing issues were left alone).
+- [x] `pyproject.toml` coverage `omit` no longer excludes `src/services/matrix.py`. New service
+      modules are ≥ 80% covered (loader 100%, matrix_index 97%, matrix 96%).
+- [x] [plan.md](plan.md) status table updated.
 
 ## 14. Results
 
-_Fill in when step 1 is done._
+Completed 2026-10-01 on branch `002-step1-data-layer`.
+
+### Performance (synthetic reference dataset, dev Mac, Python 3.14)
+
+1,000 principals × 20,000 objects × 200,000 explicit permissions; best of 3.
 
 | Measure | Budget | Measured |
 |---|---|---|
-| Index build (1,000 × 20,000 × 200,000) | 1.0 s | |
-| `query_objects` text | 30 ms | |
-| `stage` 1,000 cells | 50 ms | |
-| Index memory | 150 MB | |
-| `fetch_snapshot` on seed_large (500 × 5,000 × 50,000) | — | |
+| `PermissionIndex.build` | 1.0 s | 109 ms |
+| Index memory (tracemalloc peak during build) | 150 MB | 66 MB |
+| `row_state` × 1,000,000 | 500 ms | 67 ms |
+| `query_objects(text="ord")` | 30 ms | 0.3 ms |
+| `query_objects(text="table01")` (broad match) | 30 ms | 0.5 ms |
+| `query_objects(with_access_for=busiest)` (2,423 objects) | 10 ms | 0.2 ms |
+| `query_objects()` unfiltered | 30 ms | 0.1 ms |
+| `query_principals(text="smi", types={"U"})` | 5 ms | 0.1 ms |
+| `stage` 1,000 cells | 50 ms | 1.4 ms |
+| `stage` 20,000 cells | 1.0 s | 26 ms |
+| `undo` a 1,000-cell group | 50 ms | 1.1 ms |
+| `get_staged_changes` with 1,000 staged | 20 ms | 1.5 ms |
+| `apply_snapshot` keeping 1,000 staged changes | 1.3 s | 93 ms |
+
+### Real server (`dev/setup.sh --large`: 506 principals × 5,007 objects × 49,246 permissions)
+
+SQL Server 2022 in the local container, warm runs:
+
+| Stage | Time |
+|---|---|
+| principals | 3 ms |
+| objects | 22 ms |
+| permissions | 134 ms |
+| privileges | 2 ms |
+| **`fetch_snapshot` total** | **163 ms** |
+| `apply_snapshot` (index build) | 20 ms |
+
+Old join-based `fetch_all_permissions` on the same data: 306–461 ms vs 133 ms for
+`fetch_permission_rows`. 226 rows were skipped at build (grants to database roles such as
+`public`, which Bifrost doesn't manage).
+
+Also verified against the real server: grant → commit → refresh → revoke round trip with audit
+rows written, and GRANT plus privilege check on a principal named `odd]user's` and a table
+named `odd]tab.x` (P5/P6).
+
+### Deviations from this spec
+
+- **Permission order and state codes live in `src/models/permission.py`** (`PERMISSION_ORDER`,
+  `PERMISSION_INDEX`, `STATE_*`, `CODE_STATES`) instead of `matrix_index.py`, so the DB layer
+  can map rows without importing from services. `matrix_index.py` re-exports them as `PERMS`
+  and `PERM_INDEX`.
+- **Counts are parallel int lists** with `principal_counts(p)` / `object_counts(o)` returning a
+  frozen `RowCounts`, instead of one mutable `RowCounts` per principal/object (faster to update).
+- **Extra index field `staged_objects_by_principal`** backs `ObjectQuery.pending_for`.
+- **`LoadCancelled` renamed `LoadCancelledError`** (ruff N818). It is defined in
+  `src/db/permissions.py` and re-exported by `src/services/loader.py`.
+- **`principal_rank(p)` / `object_rank(o)`** added to the index for sorting staged changes.
+- **`execute_commit` rolls back on any exception**, not only `pyodbc.Error`
+  (`write_audit_entries` raises `ValueError` for a bad schema name).
+- **Grant-privilege cache is per object and permission** (the principal doesn't matter for
+  "does the admin hold this permission").
+- **`tests/__init__.py` added** so unit tests can import the shared generator
+  (`tests.perf.synthetic`) and fake connection (`tests.unit.fake_db`).
+- **`PermissionIndex.freeze()`** (needed for exporting off the UI thread) is left to step 2,
+  which is where it is first used.
+
+### Follow-ups found during step 1 (not fixed here)
+
+- `save_object_description` always passes `@level1type = 'TABLE'`, so descriptions on views,
+  procedures and functions fail. Fix with the object detail panel (step 3).
+- `write_audit_entries` does one round trip per row; batch it if large commits feel slow over
+  the work network.
+- FR-017a checks "admin holds the permission", not "admin may grant it" (WITH GRANT OPTION or
+  CONTROL). Decide whether to tighten.

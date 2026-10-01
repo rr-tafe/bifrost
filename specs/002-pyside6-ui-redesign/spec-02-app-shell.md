@@ -308,7 +308,7 @@ class JobContext:
      principal or object no longer exists. 1 change was already made by someone else." with a
      Details button listing them.
    - State `READY`; emit `dataLoaded`; status "Loaded 412 principals, 2,847 objects" (8 s).
-4. On `LoadCancelled`: first load → state `FAILED` with "Loading cancelled" and a Retry
+4. On `LoadCancelledError`: first load → state `FAILED` with "Loading cancelled" and a Retry
    button; refresh → stay `READY` with the old data.
 5. Other errors → section 9.6 classification, else state `FAILED` (first load) or `READY` with an
    error message (refresh).

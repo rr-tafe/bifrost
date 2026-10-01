@@ -72,6 +72,7 @@ def fetch_all_objects(conn: pyodbc.Connection) -> list[DatabaseObject]:
     try:
         query = """
             SELECT
+                o.object_id,
                 s.name AS schema_name,
                 o.name AS object_name,
                 o.type AS object_type
@@ -95,6 +96,7 @@ def fetch_all_objects(conn: pyodbc.Connection) -> list[DatabaseObject]:
                 object_type=obj_type,
                 tags=[],  # Tags loaded separately by TagStore
                 description=None,  # Loaded on-demand
+                object_id=row.object_id,
             )
             objects.append(obj)
 
@@ -133,6 +135,7 @@ def fetch_object_by_name(
     try:
         query = """
             SELECT
+                o.object_id,
                 s.name AS schema_name,
                 o.name AS object_name,
                 o.type AS object_type
@@ -158,6 +161,7 @@ def fetch_object_by_name(
             object_type=obj_type,
             tags=[],
             description=None,
+            object_id=row.object_id,
         )
 
     finally:
