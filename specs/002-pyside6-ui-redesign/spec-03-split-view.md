@@ -1,6 +1,6 @@
 # Spec — Step 3: Split View (Main Matrix Screen)
 
-**Plan**: [plan.md](plan.md) | **Created**: 2026-10-01 | **Status**: Draft — 4 open questions (section 19)
+**Plan**: [plan.md](plan.md) | **Created**: 2026-10-01 | **Status**: Ready to implement (decisions in section 19)
 **Depends on**: [step 1](spec-01-data-layer.md), [step 2](spec-02-app-shell.md) | **Blocks**: steps 4–6
 **Mockups**: https://claude.ai/artifact/9oe2fFwTwa5kzJ9AeGzZyL (option A)
 
@@ -181,9 +181,10 @@ Same pane with:
 - Filters: principal search, type chips (Users / Groups / SQL users), **Tags ▾**,
   **All principals / Only with access / Only pending**.
 
-Filter choices are remembered per mode (section 13). The default segment is **Only with
-access** (open question 3). When it gives no rows, the grid shows "CORP\nwong has no explicit
-permissions. [Show all objects]".
+Filter choices are remembered per mode (section 13). The default segment is **All objects**
+(decision 3), so new access can be granted without changing filters first; the schema groups
+keep thousands of rows navigable. When **Only with access** gives no rows, the grid shows
+"CORP\nwong has no explicit permissions. [Show all objects]".
 
 ### 7.2 Rows and columns
 
@@ -555,8 +556,8 @@ mapping.
 ## 16. Manual test script (BifrostDev with `--large`)
 
 1. Launch. Matrix tab opens in By principal mode with the first principal selected.
-2. Type "0101" in the left search; select `lg_user_0101`; grid shows Only with access rows.
-3. Switch to All objects; collapse `lg01`; scroll to the end; scrolling stays smooth.
+2. Type "0101" in the left search; select `lg_user_0101`; grid shows all objects grouped by schema.
+3. Collapse `lg01`; scroll to the end; scrolling stays smooth. Switch to Only with access; the list shrinks to their objects.
 4. Select 3 cells with Shift+arrows, press G → three staged cells; Ctrl+Z → gone.
 5. Click the SEL column header → whole column selected → G → confirmation shows counts →
    Stage → pending pill shows the number; Undo once restores everything.
@@ -575,7 +576,7 @@ mapping.
 ## 17. Acceptance criteria
 
 - [ ] `MatrixView` replaces the placeholder in READY / COMMITTING / OFFLINE states.
-- [ ] Sections 6–10 implemented; open questions in section 19 answered and reflected.
+- [ ] Sections 6–10 implemented as decided in section 19.
 - [ ] Budgets in section 14 met on the dev Mac; numbers recorded in Results.
 - [ ] All tests pass headless; `ruff check` clean for new code; new modules ≥ 80% covered
       (models, bulk, view state) and the view/grid modules covered by qtbot tests.
@@ -589,20 +590,16 @@ mapping.
 
 _Fill in when step 3 is done._
 
-## 19. Open questions (answer before implementing)
+## 19. Decisions (2026-10-01)
 
-1. **Bulk confirmation: allow "Don't ask again until Bifrost restarts"?** FR-030 asks for a
-   confirmation at 5 or more cells. Staging is undoable and Commit has its own preview, so
-   repeated confirmations may slow down bulk work. Proposal: offer the checkbox, off by default.
-2. **Raise the selection limit from 1,000 to 20,000 cells?** FR-031's limit came from the Tk
-   app's speed. The new data layer stages 20,000 cells in 26 ms. Proposal: 20,000.
-3. **Default grid filter: "Only with access" or "All objects"?** Proposal: Only with access,
-   because the usual question is "what can X do?" and it keeps the list short. All objects is
-   one click away and the choice is remembered.
-4. **Permission column headers: abbreviations (SEL, INS…) instead of icons (FR-020)?**
-   Proposal: abbreviations with the full name in the tooltip. Icons for SELECT/INSERT/…
-   aren't standard and need a legend.
-
-Also confirm the click behavior in 9.1: **click selects, double-click or Space changes**. It
-is slightly slower than click-to-toggle, but a stray click can never change a permission, in
-line with the Discard decision.
+1. **Bulk confirmation offers "Don't ask again until Bifrost restarts"**, off by default.
+   Staging is undoable and Commit has its own preview. (Deviation from FR-030 as written.)
+2. **Selection limit is 20,000 cells** per action, instead of FR-031's 1,000. Group actions
+   aren't limited.
+3. **Default grid filter is All objects** (By principal) / **All principals** (By object). The
+   last choice is remembered per mode.
+4. **Permission column headers use abbreviations** (SEL, INS, UPD, DEL, EXEC, ALTER, REF, VDEF)
+   with the full name in the tooltip and accessible name, instead of icons (FR-020). Proposed
+   and not objected to.
+5. **Click selects; double-click or Space changes a cell**, and G/D/R/U set the selection. A
+   stray click never changes a permission, in line with the Discard decision.

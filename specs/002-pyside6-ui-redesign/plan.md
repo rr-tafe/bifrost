@@ -126,7 +126,7 @@ Spec: [spec-03-split-view.md](spec-03-split-view.md)
 |---|---|---|
 | 1 Data layer and speed | Done (2026-10-01) | Branch `002-step1-data-layer`. Tk click-through still to do. Results in spec |
 | 2 App shell | Done (2026-10-01) | Branch `002-step2-app-shell`. Desktop checks (dark mode, connection loss, quit) and accessibility checks on the work machine still to do. Results in spec |
-| 3 Split view | Spec drafted (2026-10-01) | 4 open questions in spec section 19; branch `002-step3-split-view` |
+| 3 Split view | Spec ready (2026-10-01) | Decisions in spec section 19; branch `002-step3-split-view` |
 | 4 Grants tab | Not started | |
 | 5 Compare mode | Not started | |
 | 6 Cleanup | Not started | |
