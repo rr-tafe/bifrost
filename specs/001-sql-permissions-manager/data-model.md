@@ -1,6 +1,6 @@
 # Data Model: SQL Server Permissions Manager
 
-**Phase**: 1 | **Date**: 2026-07-14 | **Plan**: [plan.md](plan.md) | **Research**: [research.md](research.md)
+**Phase**: 1 | **Date**: 2026-07-14 | **Plan**: [plan.md (archived)](../archive/001-sql-permissions-manager/plan.md) | **Research**: [research.md](research.md)
 
 ## Overview
 

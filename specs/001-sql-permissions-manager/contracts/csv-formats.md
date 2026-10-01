@@ -1,6 +1,6 @@
 # CSV Export Formats
 
-**Feature**: SQL Server Permissions Manager | **Plan**: [plan.md](../plan.md)
+**Feature**: SQL Server Permissions Manager | **Plan**: [plan.md (archived)](../../archive/001-sql-permissions-manager/plan.md)
 
 Two CSV exports are available (FR-015, FR-016). Both use comma delimiters, double-quote string enclosing, and UTF-8 encoding without BOM. The first row is always a header.
 

@@ -1,6 +1,6 @@
 # Quickstart Validation Guide: SQL Server Permissions Manager
 
-**Feature**: SQL Server Permissions Manager | **Plan**: [plan.md](plan.md) | **Data model**: [data-model.md](data-model.md)
+**Feature**: SQL Server Permissions Manager | **Plan**: [plan.md (archived)](../archive/001-sql-permissions-manager/plan.md) | **Data model**: [data-model.md](data-model.md)
 
 This guide describes how to validate that Bifrost works end-to-end. It covers prerequisites, environment setup, and a runnable validation scenario for each user story. It is a testing/validation guide — not an implementation reference.
 

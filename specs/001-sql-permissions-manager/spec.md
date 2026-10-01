@@ -1,5 +1,7 @@
 # Feature Specification: SQL Server Permissions Manager
 
+> **Note (2026-10-01):** The UI layout in FR-001 (three view modes), FR-003 (cross-query highlight) and FR-028 (Compare-view pagination and pinning) is superseded by the PySide6 redesign in [specs/002-pyside6-ui-redesign](../002-pyside6-ui-redesign/plan.md). All other requirements, user stories and success criteria still apply.
+
 **Feature Branch**: `001-sql-permissions-manager`
 
 **Created**: 2026-07-14

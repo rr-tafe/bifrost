@@ -1,6 +1,8 @@
 # Research: SQL Server Permissions Manager
 
-**Phase**: 0 | **Date**: 2026-07-14 | **Plan**: [plan.md](plan.md)
+> **Note (2026-10-01):** Decision 2 (Tk Canvas rendering) and the Tkinter threading note under Decision 1 are superseded by the move to PySide6. See [specs/002-pyside6-ui-redesign](../002-pyside6-ui-redesign/plan.md). The other decisions still apply.
+
+**Phase**: 0 | **Date**: 2026-07-14 | **Plan**: [plan.md (archived)](../archive/001-sql-permissions-manager/plan.md)
 
 ## Decision 1: SQL Server Python Driver
 

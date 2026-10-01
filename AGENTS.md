@@ -15,3 +15,12 @@ Auto-Clarity: drop caveman for security warnings, irreversible actions, user con
 
 Boundaries: code/commits/PRs written normal.
 <!-- caveman-end -->
+
+## Current work: PySide6 UI redesign
+
+- Start here: `specs/002-pyside6-ui-redesign/plan.md`. It has the decisions, the six steps and a status table.
+- Each step has its own spec: `spec-01-data-layer.md` (step 1) and `spec-02-app-shell.md` (step 2). Steps 3–6 get specs when the previous step is done.
+- Requirements baseline is still `specs/001-sql-permissions-manager/spec.md`, except the matrix-layout FRs that 002 replaces (noted at the top of that file).
+- `specs/archive/` is history only. Don't implement from it.
+- When a step is finished: tick its acceptance criteria, fill in its "Results" section, and update the status table in `plan.md`.
+- Rollback point before the redesign: commit `2c8b54d`.
