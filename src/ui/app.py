@@ -7,12 +7,14 @@ tab navigation, view lifecycle, and application startup/shutdown.
 Architecture:
     BifrostApp (Tk root)
     ├── HeaderBar (server info, status)
-    ├── TabStrip (Matrix | Tags | Audit | Settings)
+    ├── TabStrip (Matrix | Audit)
     └── ViewContainer (switches active view)
         ├── MatrixView (permission grid)
-        ├── TagsView (tag management)
-        ├── AuditView (audit log)
-        └── SettingsView (connection config)
+        └── AuditView (audit log)
+
+    Auxiliary dialogs:
+        - TagManagerDialog (TagsView)
+        - SettingsDialog (SettingsView)
 
 Usage:
     from src.ui.app import BifrostApp
@@ -22,8 +24,9 @@ Usage:
 """
 
 import sys
+from datetime import datetime
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from src.models.config import Configuration
 from src.services.config import load_config
@@ -39,9 +42,7 @@ class ViewType:
     """View type constants."""
 
     MATRIX = "matrix"
-    TAGS = "tags"
     AUDIT = "audit"
-    SETTINGS = "settings"
 
 
 class BifrostApp(tk.Tk):
@@ -59,7 +60,7 @@ class BifrostApp(tk.Tk):
     Lifecycle:
         1. Load configuration from %APPDATA%/Bifrost/config.json
         2. Load tags from %APPDATA%/Bifrost/tags.json
-        3. If config missing/invalid: Show Settings view
+        3. If config missing/invalid: Open Settings dialog
         4. If config valid: Connect to database and show Matrix view
         5. On close: Confirm if unsaved changes, save tags, disconnect
 
@@ -93,6 +94,14 @@ class BifrostApp(tk.Tk):
         self.matrix: PermissionMatrix | None = None
         self.current_view: str | None = None  # None until first view is shown
         self._has_unsaved_changes = False
+        self._connection_monitor_job: str | None = None
+        self._connection_lost_notified = False
+        self._settings_window: tk.Toplevel | None = None
+        self._settings_view: SettingsView | None = None
+        # (tested_config, success, message) from the last test or connect attempt
+        self._last_connection_test: tuple[Configuration, bool, str] | None = None
+        self._tags_window: tk.Toplevel | None = None
+        self._tags_view: TagsView | None = None
 
         # View instances (lazily initialized)
         self._views: dict[str, tk.Frame] = {}
@@ -217,15 +226,20 @@ class BifrostApp(tk.Tk):
         )
         self._connection_indicator.grid(row=0, column=2, padx=10, pady=5)
 
+        controls = ttk.Frame(self._header_frame)
+        controls.grid(row=0, column=3, padx=10, pady=5, sticky="e")
+
+        ttk.Button(controls, text="🔄 Refresh", command=self._refresh).pack(side="left", padx=3)
+        ttk.Button(controls, text="🏷 Tags", command=self._open_tags_dialog).pack(side="left", padx=3)
+        ttk.Button(controls, text="⚙ Settings", command=self._open_settings_dialog).pack(side="left", padx=3)
+
     def _create_tabs(self) -> None:
         """Create the tab strip for navigation."""
         self._tab_buttons: dict[str, ttk.Button] = {}
 
         tabs = [
             (ViewType.MATRIX, "📊 Matrix", "View/edit permission matrix"),
-            (ViewType.TAGS, "🏷️ Tags", "Manage user and object tags"),
             (ViewType.AUDIT, "📋 Audit", "View change history"),
-            (ViewType.SETTINGS, "⚙️ Settings", "Configure connection"),
         ]
 
         for i, (view_type, text, tooltip) in enumerate(tabs):
@@ -277,7 +291,7 @@ class BifrostApp(tk.Tk):
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(
             label="Connect",
-            command=self._connect,
+            command=self._open_settings_dialog,
             accelerator="Ctrl+O",
         )
         file_menu.add_command(
@@ -318,7 +332,7 @@ class BifrostApp(tk.Tk):
         edit_menu.add_command(
             label="Commit Changes",
             command=self._commit_changes,
-            accelerator="Ctrl+S",
+            accelerator="Ctrl+S / Ctrl+Enter",
         )
         edit_menu.add_command(
             label="Cancel Changes",
@@ -341,19 +355,19 @@ class BifrostApp(tk.Tk):
             accelerator="Ctrl+1",
         )
         view_menu.add_command(
-            label="Tags View",
-            command=lambda: self.switch_view(ViewType.TAGS),
+            label="Audit View",
+            command=lambda: self.switch_view(ViewType.AUDIT),
+            accelerator="Ctrl+4",
+        )
+        view_menu.add_command(
+            label="Tag Manager...",
+            command=self._open_tags_dialog,
             accelerator="Ctrl+2",
         )
         view_menu.add_command(
-            label="Audit View",
-            command=lambda: self.switch_view(ViewType.AUDIT),
-            accelerator="Ctrl+3",
-        )
-        view_menu.add_command(
-            label="Settings View",
-            command=lambda: self.switch_view(ViewType.SETTINGS),
-            accelerator="Ctrl+4",
+            label="Settings...",
+            command=self._open_settings_dialog,
+            accelerator="Ctrl+,",
         )
         menubar.add_cascade(label="View", menu=view_menu)
 
@@ -374,17 +388,18 @@ class BifrostApp(tk.Tk):
 
     def _bind_shortcuts(self) -> None:
         """Bind keyboard shortcuts."""
-        self.bind("<Control-o>", lambda e: self._connect())
+        self.bind("<Control-o>", lambda e: self._open_settings_dialog())
         self.bind("<Control-e>", lambda e: self._export_permissions())
         self.bind("<Control-z>", lambda e: self._undo())
         self.bind("<Control-y>", lambda e: self._redo())
         self.bind("<Control-s>", lambda e: self._commit_changes())
+        self.bind("<Control-Return>", lambda e: self._commit_changes())
         self.bind("<Escape>", lambda e: self._cancel_changes())
         self.bind("<F5>", lambda e: self._refresh())
         self.bind("<Control-Key-1>", lambda e: self.switch_view(ViewType.MATRIX))
-        self.bind("<Control-Key-2>", lambda e: self.switch_view(ViewType.TAGS))
-        self.bind("<Control-Key-3>", lambda e: self.switch_view(ViewType.AUDIT))
-        self.bind("<Control-Key-4>", lambda e: self.switch_view(ViewType.SETTINGS))
+        self.bind("<Control-Key-2>", lambda e: self._open_tags_dialog())
+        self.bind("<Control-Key-4>", lambda e: self.switch_view(ViewType.AUDIT))
+        self.bind("<Control-comma>", lambda e: self._open_settings_dialog())
 
     def _create_tooltip(self, widget: tk.Widget, text: str) -> None:
         """Create a tooltip for a widget."""
@@ -414,22 +429,26 @@ class BifrostApp(tk.Tk):
 
     def _load_application_state(self) -> None:
         """Load configuration and tags on startup."""
+        # Load tags
+        self.tag_store = TagStore.load()
+
+        # Always render the shell with matrix as default tab.
+        self.switch_view(ViewType.MATRIX)
+
         # Load configuration
         config, error = load_config()
         if error:
             self.set_status(f"Config: {error}")
-            self.switch_view(ViewType.SETTINGS)
+            self._open_settings_dialog()
         else:
             self.config = config
             self._try_connect()
 
-        # Load tags
-        self.tag_store = TagStore.load()
-
     def _try_connect(self) -> None:
         """Attempt to connect with current configuration."""
         if not self.config or not self.config.is_valid():
-            self.switch_view(ViewType.SETTINGS)
+            self.switch_view(ViewType.MATRIX)
+            self._open_settings_dialog()
             return
 
         self.set_status("Connecting...")
@@ -453,11 +472,13 @@ class BifrostApp(tk.Tk):
 
             # Update UI
             self._update_connection_status(connected=True)
+            self._connection_lost_notified = False
             self._update_header_info(
                 server=self.config.server,
                 database=self.config.database,
                 user=current_user,
             )
+            self._start_connection_monitor()
 
             # Switch to matrix view first (creates the view if needed)
             self.switch_view(ViewType.MATRIX)
@@ -466,16 +487,24 @@ class BifrostApp(tk.Tk):
             self._update_views_with_data(self.matrix.users, self.matrix.objects)
 
             self.set_status(f"Connected as {current_user}")
+            self._last_connection_test = (
+                self.config,
+                True,
+                f"Connected to {self.config.server}/{self.config.database}",
+            )
 
         except ImportError as e:
             self.set_status(f"Module error: {e}")
             self._update_connection_status(connected=False)
+            self._stop_connection_monitor()
             self.switch_view(ViewType.MATRIX)  # Show empty matrix
 
         except Exception as e:
             self.set_status(f"Connection failed: {e}")
             self._update_connection_status(connected=False)
-            self.switch_view(ViewType.SETTINGS)
+            self._stop_connection_monitor()
+            self.switch_view(ViewType.MATRIX)
+            self._open_settings_dialog()
 
     def _update_views_with_data(self, users: list, objects: list) -> None:
         """Update views with loaded data."""
@@ -486,11 +515,9 @@ class BifrostApp(tk.Tk):
                 matrix_view.set_matrix(self.matrix)
                 matrix_view.refresh()
 
-        # Update tags view
-        if ViewType.TAGS in self._views:
-            tags_view = self._views[ViewType.TAGS]
-            if hasattr(tags_view, "set_data"):
-                tags_view.set_data(self.tag_store, users, objects)
+        # Update tags dialog view if open
+        if self._tags_view is not None:
+            self._tags_view.set_data(self.tag_store, users, objects)
 
         # Update audit view with fetch callback
         if ViewType.AUDIT in self._views:
@@ -506,7 +533,7 @@ class BifrostApp(tk.Tk):
         Switch to a different view.
 
         Args:
-            view_type: ViewType constant (MATRIX, TAGS, AUDIT, SETTINGS)
+            view_type: ViewType constant (MATRIX, AUDIT)
         """
         if view_type == self.current_view:
             return
@@ -526,8 +553,20 @@ class BifrostApp(tk.Tk):
         view = self._get_or_create_view(view_type)
         view.grid(row=0, column=0, sticky="nsew")
 
+        if view_type == ViewType.AUDIT and isinstance(view, AuditView):
+            self._configure_audit_view(view)
+            if self.connection:
+                view.refresh()
+
         self.current_view = view_type
         self.set_status(f"Viewing: {view_type.title()}")
+
+    def _configure_audit_view(self, view: AuditView) -> None:
+        """Ensure audit callbacks are always wired to current connection state."""
+        if self.connection:
+            view.set_callbacks(on_fetch=self._fetch_audit_entries, on_export=None)
+        else:
+            view.set_callbacks(on_fetch=None, on_export=None)
 
     def _get_or_create_view(self, view_type: str) -> tk.Frame:
         """Get existing view or create a new one."""
@@ -537,14 +576,6 @@ class BifrostApp(tk.Tk):
 
     def _create_view(self, view_type: str) -> tk.Frame:
         """Create a view instance."""
-        if view_type == ViewType.SETTINGS:
-            return SettingsView(
-                self._view_container,
-                config=self.config,
-                on_save=self._on_settings_saved,
-                on_test=self._test_connection,
-            )
-
         if view_type == ViewType.MATRIX:
             view = MatrixView(
                 self._view_container,
@@ -556,43 +587,112 @@ class BifrostApp(tk.Tk):
                 view.refresh()
             return view
 
-        if view_type == ViewType.TAGS:
-            view = TagsView(
-                self._view_container,
-                tag_store=self.tag_store,
-                users=[],  # Will be populated when connected
-                objects=[],
-            )
-            view.refresh()
-            return view
-
         if view_type == ViewType.AUDIT:
             view = AuditView(
                 self._view_container,
-                on_fetch=None,  # Will be set when connected
+                on_fetch=self._fetch_audit_entries if self.connection else None,
                 on_export=None,
             )
+            self._configure_audit_view(view)
             return view
 
         # Placeholder for any future views
         frame = ttk.Frame(self._view_container)
         return frame
 
+    def _open_settings_dialog(self) -> None:
+        """Open settings as a modal dialog instead of a shell tab."""
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.deiconify()
+            self._settings_window.lift()
+            self._settings_window.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Settings")
+        win.geometry("1000x720")
+        win.transient(self)
+        win.grab_set()
+
+        def on_close_settings() -> None:
+            self._settings_view = None
+            if self._settings_window is not None:
+                self._settings_window.destroy()
+            self._settings_window = None
+
+        view = SettingsView(
+            win,
+            config=self.config,
+            on_save=self._on_settings_saved,
+            on_test=self._test_connection,
+            on_cancel=on_close_settings,
+            last_test=self._last_connection_test,
+        )
+        view.pack(fill="both", expand=True)
+
+        self._settings_window = win
+        self._settings_view = view
+
+        win.protocol("WM_DELETE_WINDOW", on_close_settings)
+
+    def _open_tags_dialog(self) -> None:
+        """Open tag manager as a non-shell dialog."""
+        if self._tags_window is not None and self._tags_window.winfo_exists():
+            self._tags_window.deiconify()
+            self._tags_window.lift()
+            self._tags_window.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Tag Manager")
+        win.geometry("1100x760")
+        win.transient(self)
+
+        users = self.matrix.users if self.matrix else []
+        objects = self.matrix.objects if self.matrix else []
+
+        view = TagsView(
+            win,
+            tag_store=self.tag_store,
+            users=users,
+            objects=objects,
+        )
+        view.pack(fill="both", expand=True)
+        view.refresh()
+
+        self._tags_window = win
+        self._tags_view = view
+
+        def on_close_tags() -> None:
+            self._tags_view = None
+            if self._tags_window is not None:
+                self._tags_window.destroy()
+            self._tags_window = None
+
+        win.protocol("WM_DELETE_WINDOW", on_close_tags)
+
     def _on_settings_saved(self, config: Configuration) -> None:
         """Handle settings saved callback."""
         self.config = config
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.destroy()
+        self._settings_window = None
+        self._settings_view = None
         self._try_connect()
 
     def _test_connection(self, config: Configuration) -> tuple[bool, str]:
-        """Test database connection."""
+        """Test database connection and remember the result for the Settings dialog."""
         try:
             from src.db.connection import test_connection
 
-            return test_connection(config)
+            success, message = test_connection(config)
         except ImportError:
-            return False, "Database module not available"
+            success, message = False, "Database module not available"
         except Exception as e:
-            return False, f"Connection failed: {str(e)}"
+            success, message = False, f"Connection failed: {str(e)}"
+
+        self._last_connection_test = (config, success, message)
+        return success, message
 
     def _update_connection_status(self, connected: bool) -> None:
         """Update the connection indicator."""
@@ -608,6 +708,199 @@ class BifrostApp(tk.Tk):
     def _update_header_info(self, server: str, database: str, user: str) -> None:
         """Update header with connection details."""
         self._server_label.configure(text=f"{server}/{database} ({user})")
+
+    def _start_connection_monitor(self) -> None:
+        """Start background connection health monitoring."""
+        self._stop_connection_monitor()
+        self._connection_monitor_job = self.after(30000, self._check_connection_health)
+
+    def _stop_connection_monitor(self) -> None:
+        """Stop background connection health monitoring."""
+        if self._connection_monitor_job is not None:
+            try:
+                self.after_cancel(self._connection_monitor_job)
+            except Exception:
+                pass
+            self._connection_monitor_job = None
+
+    def _check_connection_health(self) -> None:
+        """Heartbeat check for active database connection."""
+        if not self.connection:
+            self._connection_monitor_job = None
+            return
+
+        try:
+            cursor = self.connection.cursor()
+            try:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+            finally:
+                cursor.close()
+
+            self._connection_monitor_job = self.after(30000, self._check_connection_health)
+        except Exception as e:
+            self._connection_monitor_job = None
+            self._handle_connection_loss(str(e))
+
+    def _handle_connection_loss(self, error: str) -> None:
+        """Handle detected connection loss and offer reconnect."""
+        if self._connection_lost_notified:
+            return
+
+        self._connection_lost_notified = True
+        self._update_connection_status(connected=False)
+        staged_count = len(self.matrix.get_staged_changes()) if self.matrix else 0
+        if staged_count > 0:
+            self.set_status(f"Connection lost - {staged_count} staged change(s) preserved")
+        else:
+            self.set_status("Connection lost - no staged changes")
+
+        action = self._show_connection_loss_dialog(error=error, staged_count=staged_count)
+        if action == "reconnect":
+            self._reconnect_preserving_staged_changes()
+        elif action == "settings":
+            self._open_settings_dialog()
+            self.set_status("Connection lost - update settings to reconnect")
+        else:
+            self.set_status("Offline mode - staged changes preserved")
+
+    def _show_connection_loss_dialog(self, error: str, staged_count: int) -> str:
+        """Show a connection-loss dialog with recovery options.
+
+        Returns:
+            str: "reconnect", "settings", or "offline"
+        """
+        result = tk.StringVar(value="offline")
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Connection Lost")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body,
+            text="⚠ Connection to SQL Server was lost",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 8))
+
+        staged_text = (
+            f"Staged changes preserved: {staged_count}"
+            if staged_count
+            else "No staged changes are currently pending."
+        )
+        ttk.Label(body, text=staged_text, justify="left", wraplength=520).pack(
+            anchor="w", pady=(0, 4)
+        )
+        ttk.Label(body, text=f"Error: {error}", justify="left", wraplength=520).pack(
+            anchor="w", pady=(0, 10)
+        )
+
+        ttk.Label(
+            body,
+            text="Choose how you want to continue:",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        button_row = ttk.Frame(body)
+        button_row.pack(fill="x", pady=(4, 0))
+
+        def choose(value: str) -> None:
+            result.set(value)
+            dialog.destroy()
+
+        reconnect_btn = ttk.Button(
+            button_row,
+            text="Reconnect Now",
+            command=lambda: choose("reconnect"),
+        )
+        reconnect_btn.pack(side="left", padx=(0, 6))
+        ttk.Button(
+            button_row,
+            text="Open Settings",
+            command=lambda: choose("settings"),
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            button_row,
+            text="Stay Offline",
+            command=lambda: choose("offline"),
+        ).pack(side="left")
+
+        dialog.bind("<Return>", lambda e: choose("reconnect"))
+        dialog.bind("<Escape>", lambda e: choose("offline"))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose("offline"))
+
+        dialog.update_idletasks()
+        dialog.geometry(f"+{self.winfo_rootx()+120}+{self.winfo_rooty()+120}")
+        reconnect_btn.focus_set()
+
+        self.wait_window(dialog)
+        return result.get()
+
+    def _reconnect_preserving_staged_changes(self) -> None:
+        """Reconnect and preserve currently staged changes."""
+        if not self.config:
+            self._open_settings_dialog()
+            return
+
+        staged = self.matrix.get_staged_changes() if self.matrix else []
+
+        try:
+            from src.db.audit import ensure_audit_log_table
+            from src.db.connection import create_connection, get_current_user
+
+            if self.connection:
+                try:
+                    self.connection.close()
+                except Exception:
+                    pass
+
+            self.connection = create_connection(self.config)
+            ensure_audit_log_table(self.connection, self.config.schema)
+
+            current_user = get_current_user(self.connection)
+
+            new_matrix = PermissionMatrix(self.connection, self.config.schema)
+            new_matrix.load()
+
+            for change in staged:
+                new_matrix.stage_change(
+                    user_login=change.user_login,
+                    schema_name=change.schema_name,
+                    object_name=change.object_name,
+                    permission_type=change.permission_type,
+                    new_state=change.new_state,
+                    add_to_undo=False,
+                )
+
+            self.matrix = new_matrix
+            self._connection_lost_notified = False
+            self._update_connection_status(connected=True)
+            self._update_header_info(self.config.server, self.config.database, current_user)
+            self._start_connection_monitor()
+
+            self._update_views_with_data(self.matrix.users, self.matrix.objects)
+            if self.current_view in self._views and hasattr(self._views[self.current_view], "refresh"):
+                self._views[self.current_view].refresh()
+
+            self.set_status("Reconnected - staged changes restored")
+        except Exception as e:
+            self._update_connection_status(connected=False)
+            self.set_status(f"Reconnect failed: {e}")
+            follow_up = messagebox.askyesnocancel(
+                "Reconnect Failed",
+                "Could not reconnect to the database.\n\n"
+                "Yes = Retry reconnect now\n"
+                "No = Open settings\n"
+                "Cancel = Stay offline",
+            )
+            if follow_up is True:
+                self._reconnect_preserving_staged_changes()
+            elif follow_up is False:
+                self._open_settings_dialog()
 
     def set_status(self, message: str) -> None:
         """Update the status bar message."""
@@ -635,10 +928,11 @@ class BifrostApp(tk.Tk):
 
     def _connect(self) -> None:
         """Connect to database."""
-        self.switch_view(ViewType.SETTINGS)
+        self._open_settings_dialog()
 
     def _disconnect(self) -> None:
         """Disconnect from database."""
+        self._stop_connection_monitor()
         if self.connection:
             self.connection.close()
             self.connection = None
@@ -647,19 +941,279 @@ class BifrostApp(tk.Tk):
 
     def _export_permissions(self) -> None:
         """Export permission matrix to CSV."""
-        messagebox.showinfo("Export", "Export permissions feature coming soon.")
+        if not self.matrix:
+            messagebox.showinfo("Export", "No matrix data to export.")
+            return
+
+        try:
+            from src.services.export import export_permissions_csv, get_suggested_filename
+
+            database = self.config.database if self.config else "database"
+            suggested_name = get_suggested_filename("permissions", database)
+
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=suggested_name,
+            )
+
+            if not file_path:
+                return
+
+            error = export_permissions_csv(
+                file_path=file_path,
+                users=self.matrix.users,
+                objects=self.matrix.objects,
+                assignments=self.matrix.assignments,
+                include_none=True,
+            )
+
+            if error:
+                messagebox.showerror("Export Failed", error)
+                return
+
+            messagebox.showinfo("Export Complete", f"Permissions exported to:\n{file_path}")
+            self.set_status("Permissions CSV exported")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
 
     def _export_audit(self) -> None:
         """Export audit log to CSV."""
-        messagebox.showinfo("Export", "Export audit log feature coming soon.")
+        if not self.connection:
+            messagebox.showinfo("Export", "Connect to a database to export audit log.")
+            return
+
+        try:
+            from src.services.export import export_audit_csv, get_suggested_filename
+
+            database = self.config.database if self.config else "database"
+            suggested_name = get_suggested_filename("audit", database)
+
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=suggested_name,
+            )
+
+            if not file_path:
+                return
+
+            entries = self._fetch_audit_entries({})
+            error = export_audit_csv(file_path=file_path, entries=entries)
+
+            if error:
+                messagebox.showerror("Export Failed", error)
+                return
+
+            messagebox.showinfo("Export Complete", f"Audit log exported to:\n{file_path}")
+            self.set_status("Audit log CSV exported")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
 
     def _undo(self) -> None:
         """Undo last change."""
-        self.set_status("Undo - feature coming soon")
+        if not self.matrix:
+            self.set_status("No active matrix")
+            return
+
+        if self.matrix.undo():
+            self._has_unsaved_changes = self.matrix.has_staged_changes()
+            if ViewType.MATRIX in self._views:
+                self._views[ViewType.MATRIX].refresh()
+            self.set_status("Undo applied")
+        else:
+            self.set_status("Nothing to undo")
 
     def _redo(self) -> None:
         """Redo last undone change."""
-        self.set_status("Redo - feature coming soon")
+        if not self.matrix:
+            self.set_status("No active matrix")
+            return
+
+        if self.matrix.redo():
+            self._has_unsaved_changes = self.matrix.has_staged_changes()
+            if ViewType.MATRIX in self._views:
+                self._views[ViewType.MATRIX].refresh()
+            self.set_status("Redo applied")
+        else:
+            self.set_status("Nothing to redo")
+
+    def _show_commit_preview(self, staged_changes: list) -> str:
+        """Show a commit preview dialog for larger staged batches.
+
+        Returns:
+            str: "commit", "review", or "cancel"
+        """
+        if len(staged_changes) < 5:
+            return "commit"
+
+        result = tk.StringVar(value="cancel")
+        show_all = tk.BooleanVar(value=False)
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Review {len(staged_changes)} Permission Changes")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        container = ttk.Frame(dialog, padding=12)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(
+            container,
+            text=f"Review {len(staged_changes)} Permission Changes",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        ttk.Label(
+            container,
+            text="You're about to commit the following staged changes:",
+        ).pack(anchor="w", pady=(0, 8))
+
+        preview_text = tk.Text(container, width=96, height=12, wrap="word", state="normal")
+        preview_text.pack(fill="both", expand=True)
+
+        def render_preview() -> None:
+            preview_text.configure(state="normal")
+            preview_text.delete("1.0", tk.END)
+
+            to_show = staged_changes if show_all.get() else staged_changes[:3]
+            for change in to_show:
+                preview_text.insert(
+                    tk.END,
+                    f"✓ {change.action} {change.permission_type.value} to {change.user_login} "
+                    f"on {change.schema_name}.{change.object_name}\n"
+                    f"  Previous: {change.previous_state.value}\n\n",
+                )
+
+            remaining = len(staged_changes) - len(to_show)
+            if remaining > 0:
+                preview_text.insert(tk.END, f"... and {remaining} more change(s)\n")
+
+            preview_text.configure(state="disabled")
+
+        def toggle_show_all() -> None:
+            show_all.set(not show_all.get())
+            toggle_btn.configure(
+                text=(
+                    "Show first 3 changes"
+                    if show_all.get()
+                    else f"Show all {len(staged_changes)} changes"
+                )
+            )
+            render_preview()
+
+        toggle_btn = ttk.Button(
+            container,
+            text=f"Show all {len(staged_changes)} changes",
+            command=toggle_show_all,
+        )
+        toggle_btn.pack(anchor="w", pady=(8, 10))
+
+        action_row = ttk.Frame(container)
+        action_row.pack(fill="x")
+
+        def choose(action: str) -> None:
+            result.set(action)
+            dialog.destroy()
+
+        ttk.Button(
+            action_row,
+            text="Review in Matrix",
+            command=lambda: choose("review"),
+        ).pack(side="left")
+
+        commit_btn = ttk.Button(
+            action_row,
+            text="Commit All",
+            command=lambda: choose("commit"),
+        )
+        commit_btn.pack(side="right", padx=(6, 0))
+
+        ttk.Button(
+            action_row,
+            text="Cancel",
+            command=lambda: choose("cancel"),
+        ).pack(side="right")
+
+        dialog.bind("<Escape>", lambda e: choose("cancel"))
+        dialog.bind("<Return>", lambda e: choose("commit"))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose("cancel"))
+
+        render_preview()
+        commit_btn.focus_set()
+        self.wait_window(dialog)
+        return result.get()
+
+    def _show_partial_commit_dialog(
+        self,
+        successes: int,
+        failures: list[tuple],
+    ) -> str:
+        """Show partial commit details and return the next action."""
+        result = tk.StringVar(value="retry")
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Commit Partially Failed")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        container = ttk.Frame(dialog, padding=12)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(
+            container,
+            text="⚠ Commit Partially Failed",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        ttk.Label(
+            container,
+            text=f"{successes} change(s) succeeded, {len(failures)} failed.",
+        ).pack(anchor="w", pady=(0, 8))
+
+        text = tk.Text(container, width=100, height=12, wrap="word", state="normal")
+        text.pack(fill="both", expand=True)
+        text.insert(tk.END, "Failed changes remain staged. Fix issues and retry.\n\n")
+        for change, err in failures:
+            text.insert(
+                tk.END,
+                f"✗ FAILED: {change.action} {change.permission_type.value} "
+                f"for {change.user_login} on {change.schema_name}.{change.object_name}\n"
+                f"  Reason: {err}\n\n",
+            )
+        text.configure(state="disabled")
+
+        row = ttk.Frame(container)
+        row.pack(fill="x", pady=(10, 0))
+
+        def choose(action: str) -> None:
+            result.set(action)
+            dialog.destroy()
+
+        ttk.Button(
+            row,
+            text="View Audit Log",
+            command=lambda: choose("view_audit"),
+        ).pack(side="left")
+
+        if successes > 0:
+            ttk.Button(
+                row,
+                text="Retry Failed",
+                command=lambda: choose("retry"),
+            ).pack(side="right", padx=(6, 0))
+
+        ttk.Button(
+            row,
+            text="Discard Failed",
+            command=lambda: choose("discard"),
+        ).pack(side="right")
+
+        dialog.bind("<Escape>", lambda e: choose("discard"))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose("discard"))
+
+        self.wait_window(dialog)
+        return result.get()
 
     def _commit_changes(self) -> None:
         """Commit all pending changes to the database."""
@@ -676,68 +1230,63 @@ class BifrostApp(tk.Tk):
             self.set_status("No changes to commit")
             return
 
+        preview_action = self._show_commit_preview(staged_changes)
+        if preview_action == "cancel":
+            self.set_status("Commit cancelled")
+            return
+        if preview_action == "review":
+            self.switch_view(ViewType.MATRIX)
+            self.set_status("Review staged changes in matrix")
+            return
+
         self.set_status("Committing changes...")
 
         try:
-            from datetime import datetime
+            results = self.matrix.commit()
 
-            from src.db.audit import write_audit_entries
-            from src.db.connection import get_current_user
-            from src.db.permissions import apply_permission_changes
-            from src.models.audit_entry import AuditEntry
+            failures = [(change, err) for change, err in results if err]
+            successes = len(results) - len(failures)
 
-            administrator = get_current_user(self.connection)
-
-            # Apply permission changes
-            errors = apply_permission_changes(self.connection, staged_changes)
-
-            if errors:
-                self.connection.rollback()
-                messagebox.showerror(
-                    "Commit Failed",
-                    "Failed to apply changes:\n\n" + "\n".join(errors[:5]),
-                )
-                self.set_status("Commit failed")
-                return
-
-            # Create audit entries
-            audit_entries = []
-            for change in staged_changes:
-                entry = AuditEntry(
-                    administrator=administrator,
-                    affected_user=change.user,
-                    schema_name=change.schema_name,
-                    object_name=change.object_name,
-                    permission_type=change.permission_type.value,
-                    action=change.new_state.value if change.new_state.value != "NONE" else "REVOKE",
-                    previous_state=change.old_state.value,
-                    new_state=change.new_state.value,
-                    changed_at=datetime.utcnow(),
-                    explanation=f"{change.new_state.value} {change.permission_type.value} on "
-                               f"{change.schema_name}.{change.object_name} to {change.user}",
-                )
-                audit_entries.append(entry)
-
-            # Write audit log
-            write_audit_entries(self.connection, self.config.schema, audit_entries)
-
-            # Commit transaction
-            self.connection.commit()
-
-            # Clear staged changes in matrix
-            self.matrix.commit()
-            self._has_unsaved_changes = False
+            self._has_unsaved_changes = self.matrix.has_staged_changes()
 
             # Refresh matrix view
             if ViewType.MATRIX in self._views:
                 self._views[ViewType.MATRIX].refresh()
 
-            self.set_status(f"Committed {len(staged_changes)} change(s)")
+            if failures:
+                action = self._show_partial_commit_dialog(successes, failures)
+
+                if action == "view_audit":
+                    self.switch_view(ViewType.AUDIT)
+                    self.set_status(
+                        f"Commit partial: {successes} succeeded, {len(failures)} failed"
+                    )
+                elif action == "discard":
+                    self.matrix.cancel()
+                    if ViewType.MATRIX in self._views:
+                        self._views[ViewType.MATRIX].refresh()
+                    self.set_status("Discarded failed staged changes")
+                else:
+                    self.switch_view(ViewType.MATRIX)
+                    self.set_status(
+                        f"{len(failures)} failed change(s) remain staged for retry"
+                    )
+            else:
+                self.set_status(f"Committed {successes} change(s)")
+                if successes >= 5:
+                    show_audit = messagebox.askyesno(
+                        "Commit Complete",
+                        f"{successes} permission changes were applied successfully.\n\n"
+                        "Open Audit Log now?",
+                    )
+                    if show_audit:
+                        self.switch_view(ViewType.AUDIT)
 
         except Exception as e:
             self.connection.rollback()
             messagebox.showerror("Commit Failed", str(e))
             self.set_status("Commit failed")
+            self._handle_connection_loss(str(e))
 
     def _cancel_changes(self) -> None:
         """Cancel all pending changes."""
@@ -750,10 +1299,14 @@ class BifrostApp(tk.Tk):
             self.set_status("No changes to cancel")
             return
 
-        if messagebox.askyesno(
-            "Cancel Changes",
-            f"Are you sure you want to discard {staged_count} pending change(s)?",
-        ):
+        should_cancel = True
+        if staged_count >= 5:
+            should_cancel = messagebox.askyesno(
+                "Cancel Changes",
+                f"Discard {staged_count} staged change(s)? This cannot be undone.",
+            )
+
+        if should_cancel:
             self.matrix.cancel()
             self._has_unsaved_changes = False
 
@@ -790,6 +1343,7 @@ class BifrostApp(tk.Tk):
 
         except Exception as e:
             self.set_status(f"Refresh failed: {e}")
+            self._handle_connection_loss(str(e))
 
     def _fetch_audit_entries(self, filters: dict) -> list:
         """Fetch audit entries from database with filters."""
@@ -799,17 +1353,24 @@ class BifrostApp(tk.Tk):
         try:
             from src.db.audit import fetch_audit_entries
 
+            start_date = filters.get("from_date")
+            end_date = filters.get("to_date")
+            if end_date and isinstance(end_date, datetime):
+                # End-of-day is already normalized by the view.
+                end_date = end_date
+
             return fetch_audit_entries(
                 self.connection,
                 self.config.schema,
-                user=filters.get("user"),
-                object_name=filters.get("object"),
+                start_date=start_date,
+                end_date=end_date,
+                affected_user_contains=filters.get("user"),
+                object_search=filters.get("object"),
                 action=filters.get("action"),
-                from_date=filters.get("from_date"),
-                to_date=filters.get("to_date"),
+                limit=filters.get("limit"),
             )
-        except Exception:
-            return []
+        except Exception as e:
+            raise RuntimeError(str(e)) from e
 
     def _show_shortcuts(self) -> None:
         """Show keyboard shortcuts dialog."""
@@ -819,12 +1380,13 @@ Keyboard Shortcuts
 
 Navigation:
   Ctrl+1    Matrix View
-  Ctrl+2    Tags View
-  Ctrl+3    Audit View
-  Ctrl+4    Settings View
+    Ctrl+4    Audit View
+    Ctrl+2    Tag Manager
+    Ctrl+,    Settings
 
 Actions:
   Ctrl+S    Commit Changes
+    Ctrl+Enter Commit Changes
   Ctrl+Z    Undo
   Ctrl+Y    Redo
   Escape    Cancel Changes
@@ -870,6 +1432,7 @@ permission matrix interface.
             messagebox.showwarning("Warning", f"Failed to save tags: {error}")
 
         # Disconnect
+        self._stop_connection_monitor()
         if self.connection:
             self.connection.close()
 

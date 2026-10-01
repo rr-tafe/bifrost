@@ -1,0 +1,28 @@
+# Local SQL Server for Bifrost development and testing.
+# Usage: ./dev/setup.sh  (creates dev/.env, starts the container, seeds BifrostDev)
+#
+# SQL Server 2022 Developer Edition: free for dev/test, not licensed for production.
+# The image is x86-64 only; on Apple Silicon it runs under Rosetta
+# (colima start --vm-type vz --vz-rosetta, or Docker Desktop with Rosetta enabled).
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    container_name: bifrost-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run dev/setup.sh to create dev/.env}
+    ports:
+      - "127.0.0.1:${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  mssql-data:

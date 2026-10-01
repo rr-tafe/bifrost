@@ -185,14 +185,21 @@ class Configuration:
 
         Note:
             The parent directory is created if it doesn't exist.
+            When APPDATA is unset (macOS/Linux dev machines), falls back to
+            ~/Library/Application Support/Bifrost or $XDG_CONFIG_HOME/Bifrost.
         """
         import os
+        import sys
 
         appdata = os.environ.get("APPDATA")
-        if not appdata:
-            raise RuntimeError("APPDATA environment variable not set")
+        if appdata:
+            base_dir = Path(appdata)
+        elif sys.platform == "darwin":
+            base_dir = Path.home() / "Library" / "Application Support"
+        else:
+            base_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 
-        config_dir = Path(appdata) / "Bifrost"
+        config_dir = base_dir / "Bifrost"
         config_dir.mkdir(parents=True, exist_ok=True)
 
         return config_dir / "config.json"

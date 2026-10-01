@@ -241,8 +241,11 @@ def fetch_audit_entries(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     affected_user: Optional[str] = None,
+    affected_user_contains: Optional[str] = None,
     schema_name: Optional[str] = None,
     object_name: Optional[str] = None,
+    object_search: Optional[str] = None,
+    action: Optional[str] = None,
     limit: Optional[int] = None
 ) -> list[AuditEntry]:
     """
@@ -254,8 +257,11 @@ def fetch_audit_entries(
         start_date: Filter entries on or after this date (inclusive)
         end_date: Filter entries on or before this date (inclusive)
         affected_user: Filter by affected user login name (exact match)
+        affected_user_contains: Case-insensitive partial match for affected user
         schema_name: Filter by object schema name (exact match)
         object_name: Filter by object name (exact match)
+        object_search: Case-insensitive partial match over object or schema.object
+        action: Filter by action (GRANT, DENY, REVOKE)
         limit: Maximum number of entries to return (most recent first)
 
     Returns:
@@ -298,6 +304,10 @@ def fetch_audit_entries(
             where_clauses.append("affected_user = ?")
             params.append(affected_user)
 
+        if affected_user_contains:
+            where_clauses.append("UPPER(affected_user) LIKE ?")
+            params.append(f"%{affected_user_contains.strip().upper()}%")
+
         if schema_name:
             where_clauses.append("schema_name = ?")
             params.append(schema_name)
@@ -306,8 +316,38 @@ def fetch_audit_entries(
             where_clauses.append("object_name = ?")
             params.append(object_name)
 
+        if object_search:
+            search_term = object_search.strip()
+            if "." in search_term:
+                schema_part, object_part = search_term.split(".", 1)
+                if schema_part.strip():
+                    where_clauses.append("UPPER(schema_name) LIKE ?")
+                    params.append(f"%{schema_part.strip().upper()}%")
+                if object_part.strip():
+                    where_clauses.append("UPPER(object_name) LIKE ?")
+                    params.append(f"%{object_part.strip().upper()}%")
+            else:
+                like_value = f"%{search_term.upper()}%"
+                where_clauses.append(
+                    "(UPPER(object_name) LIKE ? OR UPPER(schema_name + '.' + object_name) LIKE ?)"
+                )
+                params.extend([like_value, like_value])
+
+        if action:
+            normalized_action = action.strip().upper()
+            if normalized_action not in ("GRANT", "DENY", "REVOKE"):
+                raise ValueError(f"Invalid action filter: {action}")
+            where_clauses.append("action = ?")
+            params.append(normalized_action)
+
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        limit_clause = f"TOP {limit}" if limit else ""
+        top_limit = None
+        if limit is not None:
+            top_limit = int(limit)
+            if top_limit <= 0:
+                raise ValueError("limit must be greater than zero")
+
+        limit_clause = f"TOP {top_limit}" if top_limit else ""
 
         query = f"""
             SELECT {limit_clause}

@@ -47,6 +47,8 @@ Usage:
 """
 
 
+import os
+
 import pyodbc
 
 from src.models.config import Configuration
@@ -132,12 +134,22 @@ def create_connection(config: Configuration) -> pyodbc.Connection:
             "or 'ODBC Driver 18 for SQL Server' from Microsoft."
         )
 
-    # Build connection string for Windows Authentication
+    # Windows Authentication, unless the dev-only SQL login override is set in the
+    # environment (local SQL Server container on non-Windows hosts; see dev/setup.sh).
+    # Credentials come only from the environment and are never written to config.json.
+    dev_user = os.environ.get("BIFROST_DEV_SQL_USER")
+    dev_password = os.environ.get("BIFROST_DEV_SQL_PASSWORD")
+    if dev_user and dev_password:
+        escaped_password = dev_password.replace("}", "}}")
+        auth_clause = f"UID={dev_user};PWD={{{escaped_password}}};"
+    else:
+        auth_clause = "Trusted_Connection=yes;"
+
     connection_string = (
         f"DRIVER={{{driver}}};"
         f"SERVER={config.server},{config.port};"
         f"DATABASE={config.database};"
-        f"Trusted_Connection=yes;"
+        f"{auth_clause}"
         f"TrustServerCertificate=yes;"
         f"Encrypt=yes;"
     )

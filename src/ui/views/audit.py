@@ -20,7 +20,7 @@ Usage:
 import contextlib
 import tkinter as tk
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 from src.models.audit_entry import AuditEntry
@@ -45,6 +45,8 @@ class AuditView(ttk.Frame):
     """
 
     PAGE_SIZE = 100
+    DEFAULT_INITIAL_DAYS = 30
+    DEFAULT_INITIAL_LIMIT = 500
 
     def __init__(
         self,
@@ -68,16 +70,21 @@ class AuditView(ttk.Frame):
         self._entries: list[AuditEntry] = []
         self._current_page = 0
         self._total_pages = 0
+        self._initial_load_done = False
 
         self._create_layout()
+        self._bind_wheel_routing()
 
     def _create_layout(self) -> None:
         """Create the view layout."""
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
         # Filter bar
         self._create_filter_bar()
+
+        # Inline status / error message
+        self._create_message_bar()
 
         # Audit table
         self._create_table()
@@ -89,21 +96,23 @@ class AuditView(ttk.Frame):
         """Create the filter bar."""
         filter_frame = ttk.LabelFrame(self, text="Filters", padding=10)
         filter_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        filter_frame.grid_columnconfigure(3, weight=1)
+        filter_frame.grid_columnconfigure(11, weight=1)
 
-        # Row 1: User and Object filters
-        ttk.Label(filter_frame, text="User:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        # Single row layout with horizontal expansion.
+        ttk.Label(filter_frame, text="User:").grid(row=0, column=0, sticky="w", padx=(5, 2), pady=2)
         self._user_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._user_var, width=20).grid(
-            row=0, column=1, sticky="w", padx=5, pady=2
+            row=0, column=1, sticky="w", padx=(0, 8), pady=2
         )
 
-        ttk.Label(filter_frame, text="Object:").grid(row=0, column=2, sticky="w", padx=5, pady=2)
+        ttk.Label(filter_frame, text="Object:").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=2)
         self._object_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._object_var, width=30).grid(
-            row=0, column=3, sticky="w", padx=5, pady=2
+            row=0, column=3, sticky="ew", padx=(0, 8), pady=2
         )
 
-        ttk.Label(filter_frame, text="Action:").grid(row=0, column=4, sticky="w", padx=5, pady=2)
+        ttk.Label(filter_frame, text="Action:").grid(row=0, column=4, sticky="w", padx=(0, 2), pady=2)
         self._action_var = tk.StringVar(value="All")
         ttk.Combobox(
             filter_frame,
@@ -111,27 +120,23 @@ class AuditView(ttk.Frame):
             values=["All", "GRANT", "DENY", "REVOKE"],
             state="readonly",
             width=10,
-        ).grid(row=0, column=5, sticky="w", padx=5, pady=2)
+        ).grid(row=0, column=5, sticky="w", padx=(0, 8), pady=2)
 
-        # Row 2: Date range
-        ttk.Label(filter_frame, text="From:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(filter_frame, text="From:").grid(row=0, column=6, sticky="w", padx=(0, 2), pady=2)
         self._from_date_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._from_date_var, width=12).grid(
-            row=1, column=1, sticky="w", padx=5, pady=2
-        )
-        ttk.Label(filter_frame, text="(YYYY-MM-DD)", foreground="gray").grid(
-            row=1, column=2, sticky="w", padx=0, pady=2
+            row=0, column=7, sticky="w", padx=(0, 8), pady=2
         )
 
-        ttk.Label(filter_frame, text="To:").grid(row=1, column=3, sticky="w", padx=5, pady=2)
+        ttk.Label(filter_frame, text="To:").grid(row=0, column=8, sticky="w", padx=(0, 2), pady=2)
         self._to_date_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._to_date_var, width=12).grid(
-            row=1, column=4, sticky="w", padx=5, pady=2
+            row=0, column=9, sticky="w", padx=(0, 8), pady=2
         )
 
         # Quick date buttons
         btn_frame = ttk.Frame(filter_frame)
-        btn_frame.grid(row=1, column=5, columnspan=2, sticky="w", padx=5, pady=2)
+        btn_frame.grid(row=0, column=10, sticky="w", padx=(0, 8), pady=2)
 
         ttk.Button(btn_frame, text="Today", command=lambda: self._set_date_range(0)).pack(
             side="left", padx=2
@@ -147,14 +152,22 @@ class AuditView(ttk.Frame):
         )
 
         # Apply button
-        ttk.Button(filter_frame, text="🔍 Apply Filters", command=self.refresh).grid(
-            row=0, column=6, rowspan=2, padx=20, pady=5
+        ttk.Button(filter_frame, text="Apply Filters", command=self.refresh).grid(
+            row=0, column=11, sticky="e", padx=(12, 5), pady=2
         )
+
+        self._set_date_range(self.DEFAULT_INITIAL_DAYS)
+
+    def _create_message_bar(self) -> None:
+        """Create inline message label for empty and error states."""
+        self._message_var = tk.StringVar(value="Loading defaults: last 30 days")
+        self._message_label = ttk.Label(self, textvariable=self._message_var, foreground="#666666")
+        self._message_label.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 2))
 
     def _create_table(self) -> None:
         """Create the audit table."""
         table_frame = ttk.Frame(self)
-        table_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        table_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
         table_frame.grid_columnconfigure(0, weight=1)
         table_frame.grid_rowconfigure(0, weight=1)
 
@@ -196,10 +209,59 @@ class AuditView(ttk.Frame):
         self._tree.tag_configure("deny", foreground="red")
         self._tree.tag_configure("revoke", foreground="gray")
 
+    def _bind_wheel_routing(self) -> None:
+        """Route wheel events to the table when pointer is over it."""
+        toplevel = self.winfo_toplevel()
+        toplevel.bind("<MouseWheel>", self._on_global_mouse_wheel, add="+")
+
+    def _is_descendant_widget(self, widget, ancestor) -> bool:
+        """Check whether widget is inside ancestor in the Tk widget tree."""
+        current = widget
+        while current is not None:
+            if current == ancestor:
+                return True
+            try:
+                parent_path = current.winfo_parent()
+            except tk.TclError:
+                return False
+            if not parent_path:
+                return False
+            try:
+                current = current.nametowidget(parent_path)
+            except (tk.TclError, KeyError):
+                return False
+        return False
+
+    def _on_global_mouse_wheel(self, event) -> str | None:
+        """Handle wheel anywhere over the audit table viewport."""
+        try:
+            pointer_x, pointer_y = self.winfo_pointerxy()
+            hovered = self.winfo_containing(pointer_x, pointer_y)
+        except tk.TclError:
+            return None
+
+        if hovered is None or not self._is_descendant_widget(hovered, self._tree):
+            return None
+
+        if event.delta == 0:
+            return "break"
+
+        delta_units = int(-1 * (event.delta / 120))
+        if delta_units == 0:
+            delta_units = -1 if event.delta > 0 else 1
+
+        if bool(event.state & 0x0001):
+            with contextlib.suppress(tk.TclError):
+                self._tree.xview_scroll(delta_units, "units")
+        else:
+            with contextlib.suppress(tk.TclError):
+                self._tree.yview_scroll(delta_units, "units")
+        return "break"
+
     def _create_footer(self) -> None:
         """Create the pagination and export bar."""
         footer_frame = ttk.Frame(self)
-        footer_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+        footer_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=5)
 
         # Entry count
         self._count_label = ttk.Label(footer_frame, text="0 entries")
@@ -246,12 +308,15 @@ class AuditView(ttk.Frame):
             filters["action"] = self._action_var.get()
 
         if self._from_date_var.get():
-            with contextlib.suppress(ValueError):
-                filters["from_date"] = datetime.fromisoformat(self._from_date_var.get())
+            from_date = datetime.strptime(self._from_date_var.get(), "%Y-%m-%d").date()
+            filters["from_date"] = datetime.combine(from_date, time.min)
 
         if self._to_date_var.get():
-            with contextlib.suppress(ValueError):
-                filters["to_date"] = datetime.fromisoformat(self._to_date_var.get())
+            to_date = datetime.strptime(self._to_date_var.get(), "%Y-%m-%d").date()
+            filters["to_date"] = datetime.combine(to_date, time.max)
+
+        if not self._initial_load_done:
+            filters["limit"] = self.DEFAULT_INITIAL_LIMIT
 
         return filters
 
@@ -261,13 +326,35 @@ class AuditView(ttk.Frame):
             self._show_placeholder()
             return
 
-        filters = self._get_filters()
-        self._entries = self.on_fetch(filters)
-        self._current_page = 0
-        self._total_pages = max(1, (len(self._entries) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        try:
+            filters = self._get_filters()
+            self._entries = self.on_fetch(filters)
+            self._current_page = 0
+            self._total_pages = max(1, (len(self._entries) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
 
-        self._update_table()
-        self._update_pagination()
+            self._update_table()
+            self._update_pagination()
+            self._initial_load_done = True
+
+            if self._entries:
+                self._set_message("")
+            else:
+                self._set_message("No audit entries match the active filters.")
+
+        except ValueError as e:
+            self._set_message(f"Invalid date filter: {e}", is_error=True)
+        except Exception as e:
+            self._entries = []
+            self._current_page = 0
+            self._total_pages = 1
+            self._update_table()
+            self._update_pagination()
+            self._set_message(f"Failed to load audit entries: {e}", is_error=True)
+
+    def _set_message(self, message: str, is_error: bool = False) -> None:
+        """Set inline status message and visual state."""
+        self._message_var.set(message)
+        self._message_label.configure(foreground="#B22222" if is_error else "#666666")
 
     def _update_table(self) -> None:
         """Update the table with current page entries."""
@@ -358,7 +445,8 @@ class AuditView(ttk.Frame):
     def _show_placeholder(self) -> None:
         """Show placeholder when not connected."""
         self._tree.delete(*self._tree.get_children())
-        self._count_label.configure(text="Connect to a database to view audit log")
+        self._count_label.configure(text="0 entries")
+        self._set_message("Connect to a database to view audit log.")
 
     def set_callbacks(
         self,
@@ -368,3 +456,8 @@ class AuditView(ttk.Frame):
         """Set the fetch and export callbacks."""
         self.on_fetch = on_fetch
         self.on_export = on_export
+
+        if self.on_fetch:
+            self.refresh()
+        else:
+            self._show_placeholder()

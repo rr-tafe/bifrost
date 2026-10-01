@@ -52,6 +52,8 @@ class SettingsView(ttk.Frame):
         config: Configuration | None = None,
         on_save: Callable[[Configuration], None] | None = None,
         on_test: Callable[[Configuration], tuple[bool, str]] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        last_test: tuple[Configuration, bool, str] | None = None,
     ):
         """
         Initialize the settings view.
@@ -61,12 +63,17 @@ class SettingsView(ttk.Frame):
             config: Current configuration (None for new config)
             on_save: Callback when configuration is saved successfully
             on_test: Callback to test connection (returns (success, message))
+            on_cancel: Callback after Cancel restores the original values (e.g. close dialog)
+            last_test: Most recent (tested_config, success, message); shown while the
+                form still matches tested_config
         """
         super().__init__(parent)
 
         self.config = config or Configuration.default()
         self.on_save = on_save
         self.on_test = on_test
+        self.on_cancel = on_cancel
+        self._last_test = last_test
 
         # StringVars for form fields
         self._server_var = tk.StringVar(value=self.config.server)
@@ -75,6 +82,11 @@ class SettingsView(ttk.Frame):
         self._schema_var = tk.StringVar(value=self.config.schema)
 
         self._create_layout()
+
+        # Any edit invalidates the shown result unless the form matches the tested values again
+        for var in (self._server_var, self._port_var, self._database_var, self._schema_var):
+            var.trace_add("write", lambda *_: self._refresh_status())
+        self._refresh_status()
 
     def _create_layout(self) -> None:
         """Create the settings form layout."""
@@ -254,21 +266,34 @@ class SettingsView(ttk.Frame):
 
         if self.on_test:
             success, message = self.on_test(config)
-            self._update_status(message, success=success)
         else:
             # Default test using connection module
             try:
                 from src.db.connection import test_connection
 
                 success, message = test_connection(config)
-                self._update_status(message, success=success)
             except ImportError:
                 self._update_status(
                     "Connection test not available (db module not loaded)",
                     success=None,
                 )
+                return
             except Exception as e:
-                self._update_status(f"Connection failed: {str(e)}", success=False)
+                success, message = False, f"Connection failed: {str(e)}"
+
+        self._last_test = (config, success, message)
+        self._update_status(message, success=success)
+
+    def _refresh_status(self) -> None:
+        """Show the last test result if the form still matches the tested values."""
+        if self._last_test is not None:
+            tested_config, success, message = self._last_test
+            # Raw port check: _build_config() maps an unparseable port to 1433
+            port_unchanged = self._port_var.get().strip() == str(tested_config.port)
+            if port_unchanged and _same_connection(tested_config, self._build_config()):
+                self._update_status(message, success=success)
+                return
+        self._update_status("Not tested", success=None)
 
     def _update_status(self, message: str, success: bool | None) -> None:
         """Update the connection status display."""
@@ -310,13 +335,16 @@ class SettingsView(ttk.Frame):
         messagebox.showinfo("Saved", "Configuration saved successfully.")
 
     def _cancel(self) -> None:
-        """Cancel and restore original values."""
+        """Cancel: restore original values, then notify the owner (closes the dialog)."""
         self._server_var.set(self.config.server)
         self._port_var.set(str(self.config.port))
         self._database_var.set(self.config.database)
         self._schema_var.set(self.config.schema)
         self._show_validation_errors([])
-        self._update_status("Not tested", success=None)
+        self._refresh_status()
+
+        if self.on_cancel:
+            self.on_cancel()
 
     def set_config(self, config: Configuration) -> None:
         """
@@ -331,4 +359,15 @@ class SettingsView(ttk.Frame):
         self._database_var.set(config.database)
         self._schema_var.set(config.schema)
         self._show_validation_errors([])
-        self._update_status("Not tested", success=None)
+        self._refresh_status()
+
+
+def _same_connection(a: Configuration, b: Configuration) -> bool:
+    """True if both configurations describe the same connection target and settings."""
+    return (a.server, a.port, a.database, a.schema, a.auth_type) == (
+        b.server,
+        b.port,
+        b.database,
+        b.schema,
+        b.auth_type,
+    )

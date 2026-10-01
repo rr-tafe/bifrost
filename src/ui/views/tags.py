@@ -70,6 +70,7 @@ class TagsView(ttk.Frame):
         self._selected_tag: str | None = None
 
         self._create_layout()
+        self._bind_wheel_routing()
 
     def _create_layout(self) -> None:
         """Create the view layout."""
@@ -189,6 +190,70 @@ class TagsView(ttk.Frame):
             text="Remove Selected",
             command=self._remove_objects_from_tag,
         ).pack(side="left", padx=2)
+
+    def _bind_wheel_routing(self) -> None:
+        """Route wheel events to listboxes when pointer is over them."""
+        self._wheel_widgets = (
+            self._tag_listbox,
+            self._users_listbox,
+            self._objects_listbox,
+        )
+        toplevel = self.winfo_toplevel()
+        toplevel.bind("<MouseWheel>", self._on_global_mouse_wheel, add="+")
+
+    def _is_descendant_widget(self, widget, ancestor) -> bool:
+        """Check whether widget is inside ancestor in the Tk widget tree."""
+        current = widget
+        while current is not None:
+            if current == ancestor:
+                return True
+            try:
+                parent_path = current.winfo_parent()
+            except tk.TclError:
+                return False
+            if not parent_path:
+                return False
+            try:
+                current = current.nametowidget(parent_path)
+            except (tk.TclError, KeyError):
+                return False
+        return False
+
+    def _on_global_mouse_wheel(self, event) -> str | None:
+        """Handle wheel over any listbox in the tags view."""
+        try:
+            pointer_x, pointer_y = self.winfo_pointerxy()
+            hovered = self.winfo_containing(pointer_x, pointer_y)
+        except tk.TclError:
+            return None
+
+        if hovered is None:
+            return None
+
+        target = None
+        for widget in self._wheel_widgets:
+            if self._is_descendant_widget(hovered, widget):
+                target = widget
+                break
+
+        if target is None:
+            return None
+
+        if event.delta == 0:
+            return "break"
+
+        delta_units = int(-1 * (event.delta / 120))
+        if delta_units == 0:
+            delta_units = -1 if event.delta > 0 else 1
+
+        if bool(event.state & 0x0001):
+            try:
+                target.xview_scroll(delta_units, "units")
+            except tk.TclError:
+                pass
+        else:
+            target.yview_scroll(delta_units, "units")
+        return "break"
 
     def refresh(self) -> None:
         """Refresh the tag list."""
@@ -422,6 +487,7 @@ class UserSelectionDialog(tk.Toplevel):
         self.selected_users: list[str] = []
 
         self._create_layout()
+        self._bind_wheel_routing()
 
     def _create_layout(self) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -476,6 +542,56 @@ class UserSelectionDialog(tk.Toplevel):
         self.selected_users = [self._listbox.get(i) for i in selection]
         self.destroy()
 
+    def _bind_wheel_routing(self) -> None:
+        """Route wheel events to the dialog listbox."""
+        self.bind("<MouseWheel>", self._on_dialog_mouse_wheel, add="+")
+
+    def _on_dialog_mouse_wheel(self, event) -> str | None:
+        """Handle wheel scroll for the user selection list."""
+        try:
+            pointer_x, pointer_y = self.winfo_pointerxy()
+            hovered = self.winfo_containing(pointer_x, pointer_y)
+        except tk.TclError:
+            return None
+
+        if hovered is None:
+            return None
+
+        current = hovered
+        in_listbox = False
+        while current is not None:
+            if current == self._listbox:
+                in_listbox = True
+                break
+            try:
+                parent_path = current.winfo_parent()
+            except tk.TclError:
+                break
+            if not parent_path:
+                break
+            try:
+                current = current.nametowidget(parent_path)
+            except (tk.TclError, KeyError):
+                break
+
+        if not in_listbox:
+            return None
+
+        if event.delta == 0:
+            return "break"
+        delta_units = int(-1 * (event.delta / 120))
+        if delta_units == 0:
+            delta_units = -1 if event.delta > 0 else 1
+
+        if bool(event.state & 0x0001):
+            try:
+                self._listbox.xview_scroll(delta_units, "units")
+            except tk.TclError:
+                pass
+        else:
+            self._listbox.yview_scroll(delta_units, "units")
+        return "break"
+
 
 class ObjectSelectionDialog(tk.Toplevel):
     """Dialog for selecting objects to add to a tag."""
@@ -492,6 +608,7 @@ class ObjectSelectionDialog(tk.Toplevel):
         self.selected_objects: list[str] = []
 
         self._create_layout()
+        self._bind_wheel_routing()
 
     def _create_layout(self) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -545,3 +662,53 @@ class ObjectSelectionDialog(tk.Toplevel):
         selection = self._listbox.curselection()
         self.selected_objects = [self._listbox.get(i) for i in selection]
         self.destroy()
+
+    def _bind_wheel_routing(self) -> None:
+        """Route wheel events to the dialog listbox."""
+        self.bind("<MouseWheel>", self._on_dialog_mouse_wheel, add="+")
+
+    def _on_dialog_mouse_wheel(self, event) -> str | None:
+        """Handle wheel scroll for the object selection list."""
+        try:
+            pointer_x, pointer_y = self.winfo_pointerxy()
+            hovered = self.winfo_containing(pointer_x, pointer_y)
+        except tk.TclError:
+            return None
+
+        if hovered is None:
+            return None
+
+        current = hovered
+        in_listbox = False
+        while current is not None:
+            if current == self._listbox:
+                in_listbox = True
+                break
+            try:
+                parent_path = current.winfo_parent()
+            except tk.TclError:
+                break
+            if not parent_path:
+                break
+            try:
+                current = current.nametowidget(parent_path)
+            except (tk.TclError, KeyError):
+                break
+
+        if not in_listbox:
+            return None
+
+        if event.delta == 0:
+            return "break"
+        delta_units = int(-1 * (event.delta / 120))
+        if delta_units == 0:
+            delta_units = -1 if event.delta > 0 else 1
+
+        if bool(event.state & 0x0001):
+            try:
+                self._listbox.xview_scroll(delta_units, "units")
+            except tk.TclError:
+                pass
+        else:
+            self._listbox.yview_scroll(delta_units, "units")
+        return "break"

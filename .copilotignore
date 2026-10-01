@@ -1,0 +1,7 @@
+.clinerules/
+.cursor/
+.opencode/
+.pytest_cache/
+.ruff_cache/
+.windsurf/
+htmlcov/

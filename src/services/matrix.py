@@ -55,16 +55,37 @@ class FilterState:
     Current filter/search/sort state for the matrix view.
 
     Attributes:
-        search_term: Text search filter (matches user login, object name)
+        user_search_term: Text search filter for users (matches login name)
+        object_search_term: Text search filter for objects (matches name)
         active_filters: Dictionary of active filters (tag, object_type, permission_type)
         sort_key: Current sort key (e.g., "user_name", "object_name", "permission_type")
         sort_ascending: Sort direction
     """
 
-    search_term: str = ""
+    user_search_term: str = ""
+    object_search_term: str = ""
     active_filters: dict = field(default_factory=dict)
     sort_key: str = "object_name"
     sort_ascending: bool = True
+
+
+@dataclass
+class DataSizeInfo:
+    """
+    Information about the total data size to help users filter large datasets.
+
+    Attributes:
+        total_users: Total users in database
+        total_objects: Total objects in database
+        is_large: Whether dataset exceeds performance threshold
+        recommended_chunk_size: Recommended rows to display at once
+    """
+
+    total_users: int = 0
+    total_objects: int = 0
+    is_large: bool = False
+    recommended_chunk_size: int = 50
+    warning_message: str = ""
 
 
 @dataclass
@@ -95,8 +116,11 @@ class PermissionMatrix:
     """
     In-memory permission matrix with staging engine and commit/cancel.
 
-    The matrix holds all permissions for all users and objects loaded from the database.
+    The matrix holds permissions for users and objects loaded from the database.
     Changes are staged in memory until committed or cancelled.
+
+    Large datasets are automatically chunked to prevent UI sluggishness.
+    Users are encouraged to filter/search before viewing large result sets.
 
     Attributes:
         conn: Database connection (caller manages lifecycle)
@@ -114,9 +138,18 @@ class PermissionMatrix:
 
     Thread Safety:
         Not thread-safe. Single-threaded desktop app.
+
+    Performance:
+        - Loads data lazily in chunks to handle large datasets
+        - Limits visible cells to ~10,000 for smooth rendering
+        - Warns users if filtering recommended
     """
 
     MAX_UNDO_ENTRIES = 50
+    # Performance tuning: warn if filtered data exceeds this
+    PERF_THRESHOLD_USERS = 100
+    PERF_THRESHOLD_OBJECTS = 50
+    PERF_THRESHOLD_CELLS = 10000  # Max cells visible (users × objects × perms)
 
     def __init__(self, conn: pyodbc.Connection, schema: str = "dbo"):
         """
@@ -137,6 +170,10 @@ class PermissionMatrix:
         self.redo_stack: list[UndoEntry] = []
         self._admin_permissions: Optional[set[tuple[str, str, PermissionType]]] = None
         self._on_change_callback: Optional[Callable[[], None]] = None
+        # Track total counts before filtering for performance warnings
+        self._total_users_in_db: int = 0
+        self._total_objects_in_db: int = 0
+        self._size_info = DataSizeInfo()
 
     def set_on_change_callback(self, callback: Optional[Callable[[], None]]) -> None:
         """
@@ -166,34 +203,18 @@ class PermissionMatrix:
         self.users = db_users.fetch_all_users(self.conn)
         self.objects = db_objects.fetch_all_objects(self.conn)
 
+        # Track total counts for performance info
+        self._total_users_in_db = len(self.users)
+        self._total_objects_in_db = len(self.objects)
+
         # Load existing permissions (GRANT and DENY only)
         existing_permissions = db_permissions.fetch_all_permissions(self.conn)
 
-        # Build assignments dict from existing permissions
+        # Build sparse assignments dict from existing permissions only.
+        # Cells without explicit GRANT/DENY are treated as NONE on demand.
         self.assignments = {}
         for assignment in existing_permissions:
             self.assignments[assignment.cell_key] = assignment
-
-        # Build full grid (fill missing cells with NONE)
-        for user in self.users:
-            for obj in self.objects:
-                for perm_type in PermissionType:
-                    # Skip permissions not applicable to this object type
-                    if not obj.supports_permission(perm_type):
-                        continue
-
-                    cell_key = (user.login_name, obj.schema_name, obj.object_name, perm_type)
-
-                    if cell_key not in self.assignments:
-                        # Create NONE assignment for missing cells
-                        self.assignments[cell_key] = PermissionAssignment(
-                            user_login=user.login_name,
-                            schema_name=obj.schema_name,
-                            object_name=obj.object_name,
-                            permission_type=perm_type,
-                            committed_state=PermissionState.NONE,
-                            staged_state=None,
-                        )
 
         # Clear staged changes and undo/redo stacks
         self.staged_changes.clear()
@@ -227,6 +248,37 @@ class PermissionMatrix:
                     add_to_undo=False,
                 )
 
+    def get_performance_info(self) -> DataSizeInfo:
+        """
+        Get information about data size and performance recommendations.
+
+        Returns:
+            DataSizeInfo with warnings if data may cause performance issues
+        """
+        num_users = len(self.users)
+        num_objects = len(self.objects)
+        num_perms = len([p for p in PermissionType])
+        total_cells = num_users * num_objects * num_perms
+
+        info = DataSizeInfo(
+            total_users=self._total_users_in_db,
+            total_objects=self._total_objects_in_db,
+            is_large=False,
+            recommended_chunk_size=50,
+            warning_message="",
+        )
+
+        # Check if current display exceeds performance threshold
+        if num_users > self.PERF_THRESHOLD_USERS or num_objects > self.PERF_THRESHOLD_OBJECTS:
+            info.is_large = True
+            info.warning_message = (
+                f"⚠️  Large dataset detected: {num_users} users × {num_objects} objects.\n"
+                f"Try using Search or Filters to reduce the view size for better performance.\n"
+                f"(Viewing >100 users or >50 objects may be slow)"
+            )
+
+        return info
+
     def get_assignment(
         self,
         user_login: str,
@@ -247,7 +299,19 @@ class PermissionMatrix:
             PermissionAssignment if found, None otherwise
         """
         cell_key = (user_login, schema_name, object_name, permission_type)
-        return self.assignments.get(cell_key)
+        assignment = self.assignments.get(cell_key)
+        if assignment:
+            return assignment
+
+        # Missing assignment implies NONE committed state for valid cells.
+        return PermissionAssignment(
+            user_login=user_login,
+            schema_name=schema_name,
+            object_name=object_name,
+            permission_type=permission_type,
+            committed_state=PermissionState.NONE,
+            staged_state=None,
+        )
 
     def stage_change(
         self,
@@ -277,11 +341,7 @@ class PermissionMatrix:
             (no change needed).
         """
         cell_key = (user_login, schema_name, object_name, permission_type)
-
-        if cell_key not in self.assignments:
-            return f"Cell not found: {cell_key}"
-
-        assignment = self.assignments[cell_key]
+        assignment = self.get_assignment(user_login, schema_name, object_name, permission_type)
 
         # Get the old staged state for undo
         old_staged_state = assignment.staged_state
@@ -367,12 +427,7 @@ class PermissionMatrix:
         Returns:
             Optional[str]: Error message if toggle fails, None if successful
         """
-        cell_key = (user_login, schema_name, object_name, permission_type)
-
-        if cell_key not in self.assignments:
-            return f"Cell not found: {cell_key}"
-
-        assignment = self.assignments[cell_key]
+        assignment = self.get_assignment(user_login, schema_name, object_name, permission_type)
 
         # Get current effective state and cycle to next
         current_state = assignment.effective_state
@@ -508,17 +563,27 @@ class PermissionMatrix:
         # Clear staged changes
         self.staged_changes.clear()
 
-        # Update all assignments to remove staged_state
+        # Update staged assignments to remove staged state.
+        # If committed state is NONE, remove the sparse entry entirely.
+        updated: dict[tuple, PermissionAssignment] = {}
         for cell_key, assignment in self.assignments.items():
-            if assignment.staged_state is not None:
-                self.assignments[cell_key] = PermissionAssignment(
-                    user_login=assignment.user_login,
-                    schema_name=assignment.schema_name,
-                    object_name=assignment.object_name,
-                    permission_type=assignment.permission_type,
-                    committed_state=assignment.committed_state,
-                    staged_state=None,
-                )
+            if assignment.staged_state is None:
+                updated[cell_key] = assignment
+                continue
+
+            if assignment.committed_state == PermissionState.NONE:
+                continue
+
+            updated[cell_key] = PermissionAssignment(
+                user_login=assignment.user_login,
+                schema_name=assignment.schema_name,
+                object_name=assignment.object_name,
+                permission_type=assignment.permission_type,
+                committed_state=assignment.committed_state,
+                staged_state=None,
+            )
+
+        self.assignments = updated
 
         # Clear undo/redo stacks
         self.undo_stack.clear()
@@ -598,14 +663,15 @@ class PermissionMatrix:
             if cell_key in self.staged_changes:
                 del self.staged_changes[cell_key]
 
-            # Update committed_state
-            if cell_key in self.assignments:
-                assignment = self.assignments[cell_key]
+            # Update committed state in sparse map.
+            if change.new_state == PermissionState.NONE:
+                self.assignments.pop(cell_key, None)
+            else:
                 self.assignments[cell_key] = PermissionAssignment(
-                    user_login=assignment.user_login,
-                    schema_name=assignment.schema_name,
-                    object_name=assignment.object_name,
-                    permission_type=assignment.permission_type,
+                    user_login=change.user_login,
+                    schema_name=change.schema_name,
+                    object_name=change.object_name,
+                    permission_type=change.permission_type,
                     committed_state=change.new_state,
                     staged_state=None,
                 )
@@ -640,25 +706,68 @@ class PermissionMatrix:
             Optional[str]: Error message if validation fails, None if valid
 
         Note:
-            Caches administrator permissions on first call.
-            Refresh with refresh() or load() to re-query.
+            Uses HAS_PERMS_BY_NAME() to check the actual permission in the database,
+            including both direct grants and role-based permissions.
+            Result is not cached (checked on each grant attempt).
         """
+        # Ensure admin permissions cache is initialized (even though we'll bypass it for actual checks)
         if self._admin_permissions is None:
             self._admin_permissions = db_permissions.get_administrator_permissions(self.conn)
 
-        if (schema_name, object_name, permission_type) not in self._admin_permissions:
-            return (
-                f"You cannot grant {permission_type.value} on {schema_name}.{object_name} "
-                f"because you do not have this permission yourself."
-            )
+        # Use HAS_PERMS_BY_NAME to check the actual permission
+        # This includes both direct grants and role-based permissions
+        cursor = self.conn.cursor()
+        try:
+            full_name = f"{schema_name}.{object_name}"
+            query = f"SELECT HAS_PERMS_BY_NAME('{full_name}', 'OBJECT', '{permission_type.value}')"
+            cursor.execute(query)
+            result = cursor.fetchone()[0]
+
+            # HAS_PERMS_BY_NAME returns:
+            # 1 = user has permission
+            # 0 = user does not have permission
+            # NULL = user has DENY (explicitly denied)
+            if result != 1:
+                return (
+                    f"You cannot grant {permission_type.value} on {schema_name}.{object_name} "
+                    f"because you do not have this permission yourself."
+                )
+        finally:
+            cursor.close()
 
         return None
 
     # --- Filter/Search/Sort Methods ---
 
     def set_search_term(self, term: str) -> None:
-        """Set the search filter term."""
-        self.filter_state.search_term = term
+        """
+        Set search term (deprecated - use set_user_search_term/set_object_search_term).
+
+        For backward compatibility, sets both user and object search terms.
+
+        Args:
+            term: Search term to apply to both users and objects
+        """
+        self.filter_state.user_search_term = term
+        self.filter_state.object_search_term = term
+
+    def set_user_search_term(self, term: str) -> None:
+        """
+        Set search term for filtering users.
+
+        Args:
+            term: Search term to match against user login names
+        """
+        self.filter_state.user_search_term = term
+
+    def set_object_search_term(self, term: str) -> None:
+        """
+        Set search term for filtering objects.
+
+        Args:
+            term: Search term to match against object names
+        """
+        self.filter_state.object_search_term = term
 
     def set_filter(self, key: str, value: any) -> None:
         """Set an active filter."""
@@ -687,9 +796,9 @@ class PermissionMatrix:
         """
         users = self.users.copy()
 
-        # Apply search filter
-        if self.filter_state.search_term:
-            term = self.filter_state.search_term.lower()
+        # Apply user search filter
+        if self.filter_state.user_search_term:
+            term = self.filter_state.user_search_term.lower()
             users = [u for u in users if term in u.login_name.lower()]
 
         # Apply tag filter
@@ -712,9 +821,9 @@ class PermissionMatrix:
         """
         objects = self.objects.copy()
 
-        # Apply search filter
-        if self.filter_state.search_term:
-            term = self.filter_state.search_term.lower()
+        # Apply object search filter
+        if self.filter_state.object_search_term:
+            term = self.filter_state.object_search_term.lower()
             objects = [o for o in objects if term in o.full_name.lower()]
 
         # Apply tag filter

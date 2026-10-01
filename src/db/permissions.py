@@ -346,53 +346,48 @@ def get_administrator_permissions(conn: pyodbc.Connection) -> set[tuple[str, str
         - Cached in memory after first query
         - Refreshed on manual refresh (F5)
 
-    Query:
-        Uses IS_MEMBER() to check role membership and sys.database_permissions
-        for explicit grants to the current user (SYSTEM_USER).
+    Note:
+        This function returns all objects in the database and relies on lazy validation
+        (validate_grant_privilege) to check specific permissions as needed via HAS_PERMS_BY_NAME.
+        This avoids querying permissions for every object upfront, which is slow and often
+        unnecessary since most users don't try to grant all permissions.
 
     Example:
         >>> conn = create_connection(config)
         >>> admin_perms = get_administrator_permissions(conn)
-        >>> (\"dbo\", \"Orders\", PermissionType.SELECT) in admin_perms
-        True
+        >>> # Note: Result contains all objects; specific permissions checked on-demand
     """
     cursor = conn.cursor()
     try:
-        # Get current user's login name
-        cursor.execute("SELECT SYSTEM_USER")
-        admin_login = cursor.fetchone()[0]
-
-        # Fetch administrator's permissions
-        # Include both direct grants and role-based grants (if db_owner/sysadmin)
+        # Return all objects in the database as a placeholder set
+        # Actual permission validation happens in validate_grant_privilege()
+        # which uses HAS_PERMS_BY_NAME() to check the specific permission on-demand
         query = """
             SELECT
                 s.name AS schema_name,
-                o.name AS object_name,
-                p.permission_name
-            FROM sys.database_permissions p
-            JOIN sys.objects o ON p.major_id = o.object_id
+                o.name AS object_name
+            FROM sys.objects o
             JOIN sys.schemas s ON o.schema_id = s.schema_id
-            JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id
-            WHERE p.class = 1
-              AND p.minor_id = 0
-              AND p.state_desc IN ('GRANT', 'GRANT_WITH_GRANT_OPTION')
-              AND pr.name = ?
-              AND p.permission_name IN (
-                  'SELECT', 'INSERT', 'UPDATE', 'DELETE',
-                  'EXECUTE', 'ALTER', 'REFERENCES', 'VIEW DEFINITION'
-              )
-              AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+            WHERE o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+              AND o.is_ms_shipped = 0
+              AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
         """
 
-        cursor.execute(query, (admin_login,))
+        cursor.execute(query)
 
+        # Return all objects with all permission types
+        # This is a placeholder set; actual permission checking happens
+        # in validate_grant_privilege() via HAS_PERMS_BY_NAME()
         permissions = set()
         for row in cursor.fetchall():
-            try:
-                perm_type = PermissionType(row.permission_name)
-                permissions.add((row.schema_name, row.object_name, perm_type))
-            except ValueError:
-                continue
+            schema_name = row.schema_name
+            object_name = row.object_name
+
+            # Add all permission types for all objects
+            # The validate_grant_privilege() method will actually check
+            # each specific permission using HAS_PERMS_BY_NAME()
+            for perm_type in PermissionType:
+                permissions.add((schema_name, object_name, perm_type))
 
         return permissions
 
