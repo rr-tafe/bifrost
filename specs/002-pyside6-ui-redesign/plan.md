@@ -82,6 +82,8 @@ Spec: [spec-02-app-shell.md](spec-02-app-shell.md)
 - The Tk app stays runnable with `python main.py --legacy-tk` until step 6.
 
 ### Step 3 — Split view (main matrix screen)
+Spec: [spec-03-split-view.md](spec-03-split-view.md)
+
 - Principal list (`QListView` + proxy model): search, type chips (Users / Groups / SQL users),
   tag chips, "Has pending", counts per principal, pending dot.
 - Object grid (`QTreeView` or `QTableView` + custom delegate): schema groups with counts,
@@ -124,7 +126,7 @@ Spec: [spec-02-app-shell.md](spec-02-app-shell.md)
 |---|---|---|
 | 1 Data layer and speed | Done (2026-10-01) | Branch `002-step1-data-layer`. Tk click-through still to do. Results in spec |
 | 2 App shell | Done (2026-10-01) | Branch `002-step2-app-shell`. Desktop checks (dark mode, connection loss, quit) and accessibility checks on the work machine still to do. Results in spec |
-| 3 Split view | Not started | Spec to write after step 2 |
+| 3 Split view | Spec drafted (2026-10-01) | 4 open questions in spec section 19; branch `002-step3-split-view` |
 | 4 Grants tab | Not started | |
 | 5 Compare mode | Not started | |
 | 6 Cleanup | Not started | |
