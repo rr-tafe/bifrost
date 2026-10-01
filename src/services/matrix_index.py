@@ -27,6 +27,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -353,6 +354,20 @@ class PermissionIndex:
 
         index.set_tags(tag_store)
         return index
+
+    def freeze(self) -> PermissionIndex:
+        """
+        Return a read-only copy that is safe to read on another thread.
+
+        The committed and staged dicts are copied; principals, objects and the
+        other lists are shared, since they are not changed after build. Use it for
+        exports and other background readers. Only read from the copy:
+        row_state, committed_row, iter_explicit, iter_all_cells and the lists.
+        """
+        frozen = copy.copy(self)
+        frozen.committed = dict(self.committed)
+        frozen.staged = dict(self.staged)
+        return frozen
 
     # --- Lookups -----------------------------------------------------------------
 

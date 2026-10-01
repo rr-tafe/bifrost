@@ -334,3 +334,28 @@ def get_server_version(conn: pyodbc.Connection) -> str:
         return result[0] if result else "Unknown"
     finally:
         cursor.close()
+
+
+# SQLSTATEs that mean the connection itself is gone or unusable
+CONNECTION_LOST_SQLSTATES = frozenset({"08S01", "08001", "08003", "08004", "08007", "HYT00", "HYT01"})
+CONNECTION_LOST_MESSAGES = ("communication link failure", "tcp provider")
+
+
+def is_connection_error(error: BaseException) -> bool:
+    """
+    Return True if an exception means the database connection was lost.
+
+    Args:
+        error: Exception raised by a database call
+
+    Returns:
+        bool: True for pyodbc errors whose SQLSTATE or message indicates a lost or
+            unreachable connection; False for anything else (e.g. permission errors)
+    """
+    if not isinstance(error, pyodbc.Error):
+        return False
+    sqlstate = str(error.args[0]) if error.args else ""
+    if sqlstate in CONNECTION_LOST_SQLSTATES:
+        return True
+    message = " ".join(str(arg) for arg in error.args).lower()
+    return any(text in message for text in CONNECTION_LOST_MESSAGES)

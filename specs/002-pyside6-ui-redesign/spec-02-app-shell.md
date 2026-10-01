@@ -785,22 +785,81 @@ Remove it in step 3.
 
 ## 23. Acceptance criteria
 
-- [ ] `python main.py` opens the Qt app; `python main.py --legacy-tk` opens the Tk app.
-- [ ] Window is visible within 0.5 s of launch with the config present (measured with a log
-      timestamp from process start to first `showEvent`).
-- [ ] During a load of `seed_large` the UI stays responsive (menus open, window moves); no
-      single UI-thread task over 100 ms (log a warning from a watchdog `QTimer` if the event
-      loop stalls > 100 ms; zero warnings during the manual script).
-- [ ] Every flow in section 9 works per the manual script (section 21).
-- [ ] All dialogs in section 10 implemented; Tk feature parity for Settings, Tags, Audit,
+- [x] `python main.py` opens the Qt app; `python main.py --legacy-tk` opens the Tk app (the Tk
+      path was checked by import only, not launched).
+- [x] Window is visible within 0.5 s of launch with the config present: 178 ms (log timestamp
+      from module import to `show()`, headless on the dev Mac).
+- [x] During a load of `seed_large` the UI stays responsive: zero stall warnings (> 100 ms)
+      in the log across the smoke runs. Note: `apply_snapshot` runs on the UI thread and took
+      about 20 ms for seed_large and 109 ms for the 1,000 × 20,000 synthetic set, so very large
+      databases may log one stall at the end of a load. Move the index build off the UI thread in
+      step 3 if that shows up at work.
+- [ ] Every flow in section 9 works per the manual script (section 21). **Mostly done
+      headless**: connect, load with progress, refresh, staging via the dev action, pending
+      tray, preview, commit and revert against BifrostDev, audit search, tags and export were
+      driven by script and checked in screenshots. Still to do by hand on a desktop: stopping the
+      container to trigger the connection-lost dialog, quitting with staged changes, and live
+      dark-mode switching.
+- [x] All dialogs in section 10 implemented; Tk feature parity for Settings, Tags, Audit,
       Export, Undo/Redo, Commit/Cancel, connection loss.
-- [ ] Section 19 checklist done (NVDA and High Contrast items on the work machine may be done
-      later; note it in Results).
-- [ ] All tests pass headless; `ruff check` clean; coverage targets met.
-- [ ] README "Running" sections updated for the Qt app and `--legacy-tk`.
-- [ ] [plan.md](plan.md) status updated.
+- [ ] Section 19 accessibility checklist. Built in: accessible names, keyboard-only actions,
+      announcements, field-error association, text plus colour everywhere, contrast tests.
+      **Needs the work machine**: NVDA smoke test, Windows High Contrast themes, 200% scaling.
+- [x] All tests pass headless (328, of which 315 run in the pre-commit selection); `ruff check`
+      clean for `src/qt` and Qt tests; coverage: session 84%, worker 95%, actions 100%, theme
+      89% (target ≥ 80%).
+- [x] README "Running" sections updated for the Qt app and `--legacy-tk`.
+- [x] [plan.md](plan.md) status updated.
 
 ## 24. Results
 
-_Fill in when step 2 is done: startup time, load responsiveness, any deviations from this spec
-and why._
+Completed 2026-10-01 on branch `002-step2-app-shell`.
+
+### Measured
+
+| Measure | Target | Measured |
+|---|---|---|
+| Window shown after start | ≤ 0.5 s | 178 ms |
+| Connect + load seed_large (506 × 5,007 × 49,246), start to READY | — | 465 ms |
+| UI stalls over 100 ms during smoke runs | 0 | 0 |
+
+### Bugs found and fixed during step 2
+
+- **Crash: QObjects destroyed on worker threads.** Two causes, both fixed:
+  1. Job callbacks (which hold the `Session`) were released on the worker thread. The worker now
+     keeps callbacks in a registry on the UI thread and only sends a job id back
+     (`src/qt/worker.py`).
+  2. Python's cyclic garbage collector can run on any thread and destroy a QObject there.
+     New `src/qt/gc_guard.py` (`UiThreadGarbageCollector`) disables automatic GC and collects
+     on the UI thread every second; the Qt tests do the same per test. Before the fix,
+     `tests/unit/qt/test_session.py` crashed in every run on its own; after, 10 of 10 runs passed.
+- **Pending tray checkmark wrong after restore**: the tray reopened but its menu item wasn't
+  ticked, because the window wasn't shown yet when state was restored.
+- **Summary labels overlapped** when the staged count changed (old labels were deleted after
+  repaint). Labels are now created once and updated.
+
+### Deviations from this spec
+
+- `Session.shutdown(callback)` became `Session.close()`; the quit prompts (commit and quit,
+  wait for a running commit) live in `MainWindow.closeEvent`, keeping `Session` free of UI.
+- Extra `Session` signals: `busyMessage` (status bar progress), `privilegeDenied`,
+  `discardConfirmationRequested`.
+- New modules not in the section 3 layout: `src/qt/gc_guard.py`, `src/qt/widgets/tables.py`.
+- **File → Export audit log** exports what the Audit tab currently shows; if nothing has been
+  searched yet it asks you to search first, instead of fetching with the tab's filters itself.
+- **Export permissions** opens a small options dialog (explicit only, or every cell with row
+  counts) before the save dialog, instead of a checkbox inside the save dialog (Qt's native save
+  dialog can't hold one).
+- `PermissionIndex.freeze()` (planned for step 2 in spec 01) is implemented and used by export.
+- Ruff ignores `N802`/`N815` under `src/qt/` because Qt overrides and signals use camelCase.
+- The light-theme GRANT colour changed from `#1f7a4a` to `#1a6e42` (the first was 4.45:1 on its
+  background, just under 4.5:1); staged text `#8a5700` instead of `#a86a00` for the same reason.
+- Escape no longer discards (Ctrl+Shift+Delete does), as proposed; still open question 3 in
+  the plan until you confirm.
+
+### Not verified here (needs a real desktop or the work machine)
+
+- Dark mode rendering. The headless platform ignores the OS colour-scheme override, so only the
+  contrast tests cover the dark tokens.
+- NVDA, High Contrast and 200% scaling (section 19).
+- Native look on Windows 11 (screenshots were taken on macOS with the Fusion style).

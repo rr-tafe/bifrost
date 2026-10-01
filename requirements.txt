@@ -4,3 +4,9 @@
 # SQL Server connectivity (justified: no stdlib SQL Server driver; actively maintained;
 # full Windows Auth support; requires Microsoft ODBC Driver 18 for SQL Server at OS level)
 pyodbc==5.1.0
+
+# Desktop UI (justified: Tkinter can't keep a grid of hundreds of principals x thousands of
+# objects responsive; Qt's model/view tables only draw what's on screen). Plain pip install,
+# no installer: the wheel bundles Qt and the Visual C++ runtime. LGPL. Essentials = QtCore,
+# QtGui, QtWidgets only (about 78 MB download).
+PySide6-Essentials==6.11.2

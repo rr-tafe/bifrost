@@ -1,6 +1,6 @@
 # Plan: PySide6 UI Redesign
 
-**Created**: 2026-10-01 | **Status**: Step 1 done; step 2 next
+**Created**: 2026-10-01 | **Status**: Steps 1–2 done; step 3 next
 **Requirements baseline**: [001 spec.md](../001-sql-permissions-manager/spec.md) (user stories, FRs and success criteria still apply except where this plan says otherwise)
 **Mockups**: https://claude.ai/artifact/9oe2fFwTwa5kzJ9AeGzZyL (private; share from the page if others need it)
 **Rollback point**: commit `2c8b54d` (working tree snapshot before the redesign)
@@ -123,7 +123,7 @@ Spec: [spec-02-app-shell.md](spec-02-app-shell.md)
 | Step | Status | Notes |
 |---|---|---|
 | 1 Data layer and speed | Done (2026-10-01) | Branch `002-step1-data-layer`. Tk click-through still to do. Results in spec |
-| 2 App shell | Not started | Spec written; depends on step 1 |
+| 2 App shell | Done (2026-10-01) | Branch `002-step2-app-shell`. Desktop checks (dark mode, connection loss, quit) and accessibility checks on the work machine still to do. Results in spec |
 | 3 Split view | Not started | Spec to write after step 2 |
 | 4 Grants tab | Not started | |
 | 5 Compare mode | Not started | |

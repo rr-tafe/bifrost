@@ -14,7 +14,8 @@ Architecture:
     - On connection failure, fall back to Settings view with error details
 
 Usage:
-    python main.py
+    python main.py               # Qt app
+    python main.py --legacy-tk   # previous Tkinter app (removed in step 6)
 
 Requirements:
     - Python 3.11+
@@ -24,7 +25,18 @@ Requirements:
 """
 
 import sys
-from src.ui.app import main
+
+
+def main() -> int:
+    """Start the Qt app, or the previous Tk app with --legacy-tk (until step 6)."""
+    if "--legacy-tk" in sys.argv[1:]:
+        from src.ui.app import main as legacy_main
+
+        return legacy_main()
+
+    from src.qt.app import main as qt_main
+
+    return qt_main([arg for arg in sys.argv if arg != "--legacy-tk"])
 
 
 if __name__ == "__main__":

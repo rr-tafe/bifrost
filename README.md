@@ -2,9 +2,19 @@
 
 Bifrost is a desktop app for managing SQL Server object permissions. It shows GRANT and DENY permissions as a matrix of users against objects, lets you change them, and records every change in an audit log.
 
+- [The new interface (in progress)](#the-new-interface-in-progress)
 - [Running on macOS (development)](#running-on-macos-development)
 - [Running on Windows](#running-on-windows)
 - [Troubleshooting](#troubleshooting)
+
+## The new interface (in progress)
+
+Bifrost is moving from Tkinter to a PySide6 (Qt) interface built for databases with hundreds of principals and thousands of objects. The plan and status are in [specs/002-pyside6-ui-redesign/plan.md](specs/002-pyside6-ui-redesign/plan.md).
+
+- `python main.py` starts the new interface. It connects, loads, commits, shows the audit log and manages tags. The new matrix view isn't in it yet (step 3), so the Matrix tab shows a summary of what was loaded.
+- `python main.py --legacy-tk` starts the previous Tkinter interface, which you can still use to edit permissions until step 3 lands. It will be removed in step 6.
+- Set `BIFROST_DEV=1` to add **Help → Dev: stage sample changes**, which stages random changes so you can try the pending list, review and commit before the matrix view exists. Use it only against the dev database.
+- The app logs to `logs/bifrost.log` next to `config.json` (`~/Library/Application Support/Bifrost/` on a Mac, `%APPDATA%\Bifrost\` on Windows). Set `BIFROST_DEBUG=1` for more detail.
 
 ## Running on macOS (development)
 
@@ -41,7 +51,7 @@ The first time you start the app, Settings opens. Enter:
 | Database | `BifrostDev` |
 | Schema   | `dbo`        |
 
-Click **Test Connection**, then **Save & Connect**. The settings are saved to `~/Library/Application Support/Bifrost/config.json`, and later launches connect automatically.
+Click **Test connection**, then **Save and connect**. The settings are saved to `~/Library/Application Support/Bifrost/config.json`, and later launches connect automatically.
 
 The Settings window still says "Windows Authentication". On a Mac that's expected: while the dev login variables are set, they take over.
 
@@ -113,7 +123,7 @@ On Windows, Bifrost connects to your real SQL Server using your Windows login. N
 ### Requirements
 
 - Windows 10 or 11
-- [Python 3.11 or later](https://www.python.org/downloads/windows/). The python.org installer includes Tkinter, which the app needs.
+- [Python 3.11 or later](https://www.python.org/downloads/windows/) (3.14 is what we test with)
 - [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
 - On the target database, your Windows account must be a member of `db_owner` (or `sysadmin` on the server)
 
@@ -133,7 +143,7 @@ cd path\to\bifrost
 .venv\Scripts\python main.py
 ```
 
-The first time you start the app, enter your server name, port (usually `1433`), database and schema in Settings. Click **Test Connection**, then **Save & Connect**. The settings are saved to `%APPDATA%\Bifrost\config.json`, and later launches connect automatically.
+The first time you start the app, enter your server name, port (usually `1433`), database and schema in Settings. Click **Test connection**, then **Save and connect**. The settings are saved to `%APPDATA%\Bifrost\config.json`, and later launches connect automatically.
 
 Don't set `BIFROST_DEV_SQL_USER` or `BIFROST_DEV_SQL_PASSWORD` on Windows. They switch the app from Windows Authentication to the dev SQL login.
 

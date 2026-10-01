@@ -32,7 +32,7 @@ class FakeCursor:
         conn = self.connection
         conn.executed.append((sql, params))
         if conn.fail_on and conn.fail_on(sql):
-            raise pyodbc.Error("08S01", "[08S01] Communication link failure")
+            raise pyodbc.Error(*conn.fail_error)
         self._rows = list(conn.respond(sql, params))
         return self
 
@@ -62,6 +62,7 @@ class FakeConnection:
         flags: (sysadmin, db_owner, control) for fetch_privilege_flags
         held: set of (schema, object, permission_name) the admin holds
         fail_on: optional predicate(sql) -> bool; matching statements raise pyodbc.Error
+        fail_error: args for that error (default an ordinary SQL error, not a lost connection)
         executed: every (sql, params) executed
     """
 
@@ -72,6 +73,7 @@ class FakeConnection:
         self.flags = (0, 0, 0)
         self.held: set[tuple[str, str, str]] = set()
         self.fail_on = None
+        self.fail_error = ("42000", "[42000] Statement failed")
         self.executed: list[tuple] = []
         self.commits = 0
         self.rollbacks = 0

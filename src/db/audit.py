@@ -236,6 +236,80 @@ def write_audit_entries(
         cursor.close()
 
 
+def _build_audit_filters(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    affected_user: str | None = None,
+    affected_user_contains: str | None = None,
+    schema_name: str | None = None,
+    object_name: str | None = None,
+    object_search: str | None = None,
+    action: str | None = None,
+) -> tuple[str, list]:
+    """
+    Build the WHERE clause and parameters shared by fetch_audit_entries and get_audit_entry_count.
+
+    Returns:
+        tuple[str, list]: ("WHERE ..." or "", parameters)
+
+    Raises:
+        ValueError: If action is not GRANT, DENY or REVOKE
+    """
+    where_clauses = []
+    params = []
+
+    if start_date:
+        where_clauses.append("changed_at >= ?")
+        params.append(start_date)
+
+    if end_date:
+        where_clauses.append("changed_at <= ?")
+        params.append(end_date)
+
+    if affected_user:
+        where_clauses.append("affected_user = ?")
+        params.append(affected_user)
+
+    if affected_user_contains:
+        where_clauses.append("UPPER(affected_user) LIKE ?")
+        params.append(f"%{affected_user_contains.strip().upper()}%")
+
+    if schema_name:
+        where_clauses.append("schema_name = ?")
+        params.append(schema_name)
+
+    if object_name:
+        where_clauses.append("object_name = ?")
+        params.append(object_name)
+
+    if object_search:
+        search_term = object_search.strip()
+        if "." in search_term:
+            schema_part, object_part = search_term.split(".", 1)
+            if schema_part.strip():
+                where_clauses.append("UPPER(schema_name) LIKE ?")
+                params.append(f"%{schema_part.strip().upper()}%")
+            if object_part.strip():
+                where_clauses.append("UPPER(object_name) LIKE ?")
+                params.append(f"%{object_part.strip().upper()}%")
+        else:
+            like_value = f"%{search_term.upper()}%"
+            where_clauses.append(
+                "(UPPER(object_name) LIKE ? OR UPPER(schema_name + '.' + object_name) LIKE ?)"
+            )
+            params.extend([like_value, like_value])
+
+    if action:
+        normalized_action = action.strip().upper()
+        if normalized_action not in ("GRANT", "DENY", "REVOKE"):
+            raise ValueError(f"Invalid action filter: {action}")
+        where_clauses.append("action = ?")
+        params.append(normalized_action)
+
+    where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    return where_clause, params
+
+
 def fetch_audit_entries(
     conn: pyodbc.Connection,
     schema: str = "dbo",
@@ -289,59 +363,16 @@ def fetch_audit_entries(
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
             raise ValueError(f"Invalid schema name: {schema}")
 
-        # Build query with filters
-        where_clauses = []
-        params = []
-
-        if start_date:
-            where_clauses.append("changed_at >= ?")
-            params.append(start_date)
-
-        if end_date:
-            where_clauses.append("changed_at <= ?")
-            params.append(end_date)
-
-        if affected_user:
-            where_clauses.append("affected_user = ?")
-            params.append(affected_user)
-
-        if affected_user_contains:
-            where_clauses.append("UPPER(affected_user) LIKE ?")
-            params.append(f"%{affected_user_contains.strip().upper()}%")
-
-        if schema_name:
-            where_clauses.append("schema_name = ?")
-            params.append(schema_name)
-
-        if object_name:
-            where_clauses.append("object_name = ?")
-            params.append(object_name)
-
-        if object_search:
-            search_term = object_search.strip()
-            if "." in search_term:
-                schema_part, object_part = search_term.split(".", 1)
-                if schema_part.strip():
-                    where_clauses.append("UPPER(schema_name) LIKE ?")
-                    params.append(f"%{schema_part.strip().upper()}%")
-                if object_part.strip():
-                    where_clauses.append("UPPER(object_name) LIKE ?")
-                    params.append(f"%{object_part.strip().upper()}%")
-            else:
-                like_value = f"%{search_term.upper()}%"
-                where_clauses.append(
-                    "(UPPER(object_name) LIKE ? OR UPPER(schema_name + '.' + object_name) LIKE ?)"
-                )
-                params.extend([like_value, like_value])
-
-        if action:
-            normalized_action = action.strip().upper()
-            if normalized_action not in ("GRANT", "DENY", "REVOKE"):
-                raise ValueError(f"Invalid action filter: {action}")
-            where_clauses.append("action = ?")
-            params.append(normalized_action)
-
-        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        where_clause, params = _build_audit_filters(
+            start_date=start_date,
+            end_date=end_date,
+            affected_user=affected_user,
+            affected_user_contains=affected_user_contains,
+            schema_name=schema_name,
+            object_name=object_name,
+            object_search=object_search,
+            action=action,
+        )
         top_limit = None
         if limit is not None:
             top_limit = int(limit)
@@ -422,17 +453,27 @@ def fetch_recent_audit_entries(
 
 def get_audit_entry_count(
     conn: pyodbc.Connection,
-    schema: str = "dbo"
+    schema: str = "dbo",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    affected_user: str | None = None,
+    affected_user_contains: str | None = None,
+    schema_name: str | None = None,
+    object_name: str | None = None,
+    object_search: str | None = None,
+    action: str | None = None,
 ) -> int:
     """
-    Get the total count of audit entries.
+    Count audit entries, optionally with the same filters as fetch_audit_entries.
 
     Args:
         conn: Active database connection
         schema: Schema name for audit log table
+        start_date, end_date, affected_user, affected_user_contains, schema_name,
+        object_name, object_search, action: Same meaning as in fetch_audit_entries
 
     Returns:
-        int: Total number of audit entries
+        int: Number of matching audit entries
 
     Example:
         >>> conn = create_connection(config)
@@ -446,8 +487,18 @@ def get_audit_entry_count(
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
             raise ValueError(f"Invalid schema name: {schema}")
 
-        query = f"SELECT COUNT(*) FROM {quote_ident(schema)}.[Bifrost_audit_log]"
-        cursor.execute(query)
+        where_clause, params = _build_audit_filters(
+            start_date=start_date,
+            end_date=end_date,
+            affected_user=affected_user,
+            affected_user_contains=affected_user_contains,
+            schema_name=schema_name,
+            object_name=object_name,
+            object_search=object_search,
+            action=action,
+        )
+        query = f"SELECT COUNT(*) FROM {quote_ident(schema)}.[Bifrost_audit_log] {where_clause}"
+        cursor.execute(query, params)
         row = cursor.fetchone()
         return row[0] if row else 0
 
