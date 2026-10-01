@@ -133,13 +133,10 @@ Spec: [spec-02-app-shell.md](spec-02-app-shell.md)
 
 1. **Python version on the work machine.** Resolved 2026-10-01: Python 3.14, same as the dev
    venv.
-2. **Installing PySide6 at work.** Mostly resolved 2026-10-01: PySide6 is a plain
-   `pip install` from PyPI with no installer or MSI. `PySide6-Essentials` 6.11.2 has a Windows
-   wheel (`cp310-abi3-win_amd64`) that works on Python 3.14, and it bundles the Qt and
-   Visual C++ runtime DLLs. Download is about 78 MB; installed size is about 210 MB. Still to
-   confirm on the work machine: `pip install PySide6-Essentials==6.11.2`, then
-   `python -c "from PySide6.QtWidgets import QApplication, QLabel; a = QApplication([]); QLabel('ok').show(); a.processEvents()"`
-   runs without being blocked (by PyPI access, or by policy on DLLs loaded from user folders).
+2. **Installing PySide6 at work.** Resolved 2026-10-01: PySide6 is a plain `pip install` from
+   PyPI (no installer or MSI). `PySide6-Essentials` 6.11.2 (`cp310-abi3-win_amd64`) installed
+   and ran a test window on the work machine with Python 3.14. It bundles the Qt and Visual C++
+   runtime DLLs; about 78 MB download, 210 MB installed.
 3. **Escape key.** The old spec bound Escape to "discard all staged changes". Step 2 proposes
    moving discard to Ctrl+Shift+Delete, so Escape only clears selection and closes popups.
    Confirm.
